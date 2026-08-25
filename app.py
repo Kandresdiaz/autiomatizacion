@@ -1,204 +1,230 @@
 import os
 import json
 import streamlit as st
-from tiktok_crossposter import run_crosspost_workflow, fetch_latest_tiktok_video, load_processed_ids
+from tiktok_crossposter import run_crosspost_workflow, fetch_latest_tiktok_videos, load_processed_ids
 
 st.set_page_config(
-    page_title="TikTok Multi-Platform Crossposter",
-    page_icon="⚡",
+    page_title="Dark Command Center",
+    page_icon="🤖",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="collapsed"
 )
 
-# Estilos CSS Modernos
+# Estilo Dark Command Center (Opción 1) - CSS personalizado
 st.markdown("""
     <style>
-    .main { background-color: #0e1117; }
+    /* Fondo principal y barra lateral */
+    .stApp {
+        background-color: #050505 !important;
+        color: #ffffff !important;
+    }
+    
+    /* Remover elementos innecesarios */
+    #MainMenu {visibility: hidden;}
+    footer {visibility: hidden;}
+    header {visibility: hidden;}
+    
+    /* Contenedor principal */
+    .main-container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 20px;
+    }
+    
+    /* Botón PUBLICAR AHORA */
     .stButton>button {
         width: 100%;
-        background: linear-gradient(90deg, #ff0050 0%, #00f2fe 100%);
-        color: white;
-        font-weight: bold;
-        border: none;
-        padding: 12px 24px;
-        border-radius: 8px;
-        font-size: 16px;
+        background: linear-gradient(90deg, #8a2be2 0%, #ff007f 100%) !important;
+        color: white !important;
+        font-weight: 800 !important;
+        border: none !important;
+        padding: 16px 32px !important;
+        border-radius: 50px !important;
+        font-size: 20px !important;
+        letter-spacing: 2px !important;
+        transition: all 0.3s ease !important;
+        box-shadow: 0 4px 15px rgba(138, 43, 226, 0.4) !important;
+        text-transform: uppercase;
+        margin-bottom: 20px;
     }
     .stButton>button:hover {
-        opacity: 0.9;
-        transform: scale(1.01);
+        opacity: 0.95 !important;
+        transform: translateY(-2px) !important;
+        box-shadow: 0 6px 20px rgba(255, 0, 127, 0.6) !important;
     }
-    .metric-card {
-        background-color: #1e222d;
-        padding: 20px;
-        border-radius: 12px;
-        border: 1px solid #2e3440;
+    
+    /* Card de vista previa de TikTok */
+    .preview-card {
+        background-color: #0c0c0e;
+        border: 1px solid #1a1a1e;
+        border-radius: 20px;
+        padding: 24px;
+        text-align: center;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    
+    /* Panel de controles */
+    .controls-panel {
+        background-color: #0c0c0e;
+        border: 1px solid #1a1a1e;
+        border-radius: 20px;
+        padding: 30px;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        height: 100%;
+    }
+    
+    /* Título de secciones */
+    .section-title {
+        font-size: 14px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        color: #66666e;
+        margin-bottom: 20px;
+    }
+    
+    /* Toggles */
+    .stCheckbox>label {
+        font-size: 16px !important;
+        font-weight: 500 !important;
+        color: #ffffff !important;
+    }
+    
+    /* Barra de estado */
+    .status-bar {
+        background-color: #0c0c0e;
+        border-top: 1px solid #1a1a1e;
+        padding: 12px 24px;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        color: #88888e;
+        z-index: 999;
+    }
+    .status-dot {
+        height: 8px;
+        width: 8px;
+        background-color: #00ff88;
+        border-radius: 50%;
+        display: inline-block;
+        margin-right: 8px;
+        box-shadow: 0 0 8px #00ff88;
     }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("⚡ TikTok Crossposter Dashboard")
-st.caption("Automatiza la republicación de TikTok a YouTube Shorts, Instagram Reels, X y Reddit de forma 100% gratuita.")
+# Helper para cargar/guardar configuración de plataformas activas
+def load_active() -> dict:
+    path = "active_platforms.json"
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {"youtube": True, "instagram": True, "x": True, "reddit": True}
 
-# Sidebar
-with st.sidebar:
-    st.image("https://img.icons8.com/color/96/tiktok.png", width=64)
-    st.header("Configuración Rápida")
-    
-    tiktok_username = st.text_input("Usuario de TikTok", value="@kevindiaz", help="Tu usuario público de TikTok con o sin @")
-    
-    st.divider()
-    st.subheader("Estado de Conexiones")
-    
-    # Indicadores de credenciales configuradas
-    yt_ok = bool(os.getenv("YOUTUBE_CLIENT_ID"))
-    ig_ok = bool(os.getenv("INSTAGRAM_ACCESS_TOKEN"))
-    x_ok = bool(os.getenv("X_API_KEY"))
-    rd_ok = bool(os.getenv("REDDIT_CLIENT_ID"))
-    
-    st.markdown(f"🔴 YouTube Shorts: **{'✅ Configurado' if yt_ok else '⚠️ Sin Llaves'}**")
-    st.markdown(f"🔴 Instagram Reels: **{'✅ Configurado' if ig_ok else '⚠️ Sin Llaves'}**")
-    st.markdown(f"🔴 X (Twitter): **{'✅ Configurado' if x_ok else '⚠️ Sin Llaves'}**")
-    st.markdown(f"🔴 Reddit: **{'✅ Configurado' if rd_ok else '⚠️ Sin Llaves'}**")
-    
-    st.divider()
-    st.info("💡 **Tip:** Puedes configurar tus llaves en la pestaña de 'Configuración de Credenciales' o mediante GitHub Secrets.")
+def save_active(data: dict):
+    with open("active_platforms.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
 
-# Tabs principales
-tab1, tab2, tab3, tab4 = st.tabs(["🚀 Panel de Control", "🔑 Credenciales y APIs", "📋 Historial", "📖 Guía Rápida"])
+active_platforms = load_active()
 
-# TAB 1: PANEL DE CONTROL
-with tab1:
-    col1, col2 = st.columns([1, 1])
-    
-    with col1:
-        st.subheader("1. Vista Previa de TikTok")
-        if tiktok_username:
-            with st.spinner("Buscando último video..."):
-                video_info = fetch_latest_tiktok_video(tiktok_username)
-                if video_info:
-                    st.success("✅ ¡Último video detectado!")
-                    st.markdown(f"**Título:** {video_info['title']}")
-                    st.markdown(f"**ID de Video:** `{video_info['id']}`")
-                    if video_info.get("cover"):
-                        st.image(video_info["cover"], width=280, caption="Portada del Video")
+# Cargar configuración del .env para el usuario
+tiktok_user = os.getenv("TIKTOK_USERNAME", "@b00kevin")
+
+# Contenedor principal
+st.markdown('<div class="main-container">', unsafe_allow_html=True)
+
+# 1. BOTÓN GRANDE DE PUBLICACIÓN (Arriba del todo)
+st.markdown('<div style="text-align: center;">', unsafe_allow_html=True)
+if st.button("⚡ PUBLICAR AHORA"):
+    with st.spinner("Procesando último video de TikTok y publicando..."):
+        config = dict(os.environ)
+        config["FORCE_RUN"] = "1"  # Forzar ejecución para publicar el último video actual
+        res = run_crosspost_workflow(config)
+        
+        if res.get("status") in ["success", "partial_failure"]:
+            st.balloons()
+            st.success(f"¡Publicado exitosamente! Video: {res.get('title')}")
+            # Mostrar resultados por red
+            for net, ok in res.get("results", {}).items():
+                if ok:
+                    st.markdown(f"✅ **{net.capitalize()}**: Publicado con éxito.")
                 else:
-                    st.warning(f"No se pudo obtener el último video para {tiktok_username}. Verifica el nombre de usuario.")
+                    st.markdown(f"❌ **{net.capitalize()}**: Falló o no configurado.")
+        elif res.get("status") == "skipped":
+            st.warning("El último video ya fue publicado en tus redes sociales previamente.")
         else:
-            st.info("Por favor ingresa un nombre de usuario de TikTok en la barra lateral.")
+            st.error(f"Error: {res.get('message')}")
+st.markdown('</div>', unsafe_allow_html=True)
 
-    with col2:
-        st.subheader("2. Lanzar Automatización")
-        st.write("Haz clic para procesar manualmente el último video y resubirlo a tus redes configuradas.")
-        
-        force_run = st.checkbox("Forzar publicación (ignorar si ya fue procesado antes)")
-        
-        if st.button("🚀 PUBLICAR AHORA"):
-            if not tiktok_username:
-                st.error("Debes especificar un usuario de TikTok primero.")
-            else:
-                config = dict(os.environ)
-                config["TIKTOK_USERNAME"] = tiktok_username
-                if force_run:
-                    config["FORCE_RUN"] = "1"
-                    
-                with st.spinner("Descargando video sin marca de agua y resubiendo a redes..."):
-                    res = run_crosspost_workflow(config)
-                    
-                if res.get("status") == "success":
-                    st.balloons()
-                    st.success(f"🎉 ¡Publicación completada para: {res.get('title')}!")
-                    
-                    results = res.get("results", {})
-                    st.json(results)
-                elif res.get("status") == "skipped":
-                    st.warning(f"ℹ️ {res.get('message')}")
-                else:
-                    st.error(f"❌ Error: {res.get('message')}")
+# 2. COLUMNAS PRINCIPALES (Vista previa izquierda, Toggles derecha)
+col_left, col_right = st.columns([1.2, 1])
 
-# TAB 2: CONFIGURACIÓN DE CREDENCIALES
-with tab2:
-    st.subheader("🔑 Configuración de Llaves de API Gratis")
-    st.write("Ingresa tus credenciales aquí para probar localmente o copiarlas a tus GitHub Secrets.")
+with col_left:
+    st.markdown('<div class="preview-card">', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Vista Previa de TikTok</div>', unsafe_allow_html=True)
     
-    with st.form("credentials_form"):
-        st.markdown("### 🔴 YouTube Shorts API")
-        yt_client_id = st.text_input("YouTube Client ID", value=os.getenv("YOUTUBE_CLIENT_ID", ""))
-        yt_client_secret = st.text_input("YouTube Client Secret", value=os.getenv("YOUTUBE_CLIENT_SECRET", ""), type="password")
-        yt_refresh_token = st.text_input("YouTube Refresh Token", value=os.getenv("YOUTUBE_REFRESH_TOKEN", ""), type="password")
-        
-        st.markdown("### 🔴 Instagram Graph API")
-        ig_user_id = st.text_input("Instagram User ID", value=os.getenv("INSTAGRAM_USER_ID", ""))
-        ig_access_token = st.text_input("Instagram Access Token", value=os.getenv("INSTAGRAM_ACCESS_TOKEN", ""), type="password")
-        
-        st.markdown("### 🔴 X (Twitter) API v2 Free")
-        x_api_key = st.text_input("X API Key", value=os.getenv("X_API_KEY", ""))
-        x_api_secret = st.text_input("X API Secret", value=os.getenv("X_API_SECRET", ""), type="password")
-        x_access_token = st.text_input("X Access Token", value=os.getenv("X_ACCESS_TOKEN", ""))
-        x_access_secret = st.text_input("X Access Token Secret", value=os.getenv("X_ACCESS_TOKEN_SECRET", ""), type="password")
-        
-        st.markdown("### 🔴 Reddit API")
-        rd_client_id = st.text_input("Reddit Client ID", value=os.getenv("REDDIT_CLIENT_ID", ""))
-        rd_client_secret = st.text_input("Reddit Client Secret", value=os.getenv("REDDIT_CLIENT_SECRET", ""), type="password")
-        rd_username = st.text_input("Reddit Username", value=os.getenv("REDDIT_USERNAME", ""))
-        rd_password = st.text_input("Reddit Password", value=os.getenv("REDDIT_PASSWORD", ""), type="password")
-        
-        save_btn = st.form_submit_button("💾 Guardar Cambios")
-        
-        if save_btn:
-            # Guardar en archivo .env
-            env_content = f"""TIKTOK_USERNAME={tiktok_username}
-YOUTUBE_CLIENT_ID={yt_client_id}
-YOUTUBE_CLIENT_SECRET={yt_client_secret}
-YOUTUBE_REFRESH_TOKEN={yt_refresh_token}
-INSTAGRAM_USER_ID={ig_user_id}
-INSTAGRAM_ACCESS_TOKEN={ig_access_token}
-X_API_KEY={x_api_key}
-X_API_SECRET={x_api_secret}
-X_ACCESS_TOKEN={x_access_token}
-X_ACCESS_TOKEN_SECRET={x_access_secret}
-REDDIT_CLIENT_ID={rd_client_id}
-REDDIT_CLIENT_SECRET={rd_client_secret}
-REDDIT_USERNAME={rd_username}
-REDDIT_PASSWORD={rd_password}
-"""
-            with open(".env", "w", encoding="utf-8") as f:
-                f.write(env_content)
-            st.success("✅ Credenciales guardadas con éxito en `.env`!")
+    with st.spinner("Buscando último video..."):
+        videos = fetch_latest_tiktok_videos(tiktok_user, count=1)
+        if videos:
+            latest = videos[0]
+            st.markdown(f"### {latest['title'] or 'Video sin título'}")
+            st.caption(f"TikTok ID: {latest['id']}")
+            
+            # Buscamos miniatura / reproductor
+            st.video(latest['webpage_url'])
+        else:
+            st.warning(f"No se detectaron videos para el usuario {tiktok_user}. Verifica tu configuración.")
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# TAB 3: HISTORIAL
-with tab3:
-    st.subheader("📋 Historial de Videos Procesados")
-    processed_ids = load_processed_ids()
-    st.write(f"Total de videos registrados como procesados: **{len(processed_ids)}**")
+with col_right:
+    st.markdown('<div class="controls-panel">', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">Canales de Publicación</div>', unsafe_allow_html=True)
+    st.write("Elige en qué redes sociales quieres que el robot publique de forma automática:")
     
-    if processed_ids:
-        st.json(processed_ids)
-    else:
-        st.info("Aún no hay registros de videos procesados.")
+    # Checkboxes estilizados como Toggles
+    yt_active = st.checkbox("YouTube Shorts", value=active_platforms.get("youtube", True), key="yt_toggle")
+    ig_active = st.checkbox("Instagram Reels", value=active_platforms.get("instagram", True), key="ig_toggle")
+    x_active = st.checkbox("X (Twitter)", value=active_platforms.get("x", True), key="x_toggle")
+    rd_active = st.checkbox("Reddit", value=active_platforms.get("reddit", True), key="rd_toggle")
+    
+    # Guardar cambios si hay modificación
+    new_active = {
+        "youtube": yt_active,
+        "instagram": ig_active,
+        "x": x_active,
+        "reddit": rd_active
+    }
+    if new_active != active_platforms:
+        save_active(new_active)
+        st.toast("Configuración de canales actualizada.", icon="💾")
+        
+    st.divider()
+    st.markdown('<div class="section-title">Ajustes Rápidos</div>', unsafe_allow_html=True)
+    new_user = st.text_input("Usuario de TikTok:", value=tiktok_user)
+    if new_user != tiktok_user:
+        # Guardar en .env
+        with open(".env", "w", encoding="utf-8") as f:
+            f.write(f"TIKTOK_USERNAME={new_user}\n")
+        st.toast("Usuario de TikTok actualizado.", icon="👤")
+        
+    st.markdown('</div>', unsafe_allow_html=True)
 
-# TAB 4: GUÍA RÁPIDA DE APIS
-with tab4:
-    st.subheader("⚡ Dónde sacar cada API gratis en 2 minutos")
-    
-    st.markdown("""
-    #### 1️⃣ YouTube Shorts (Google Cloud Console)
-    1. Entra a [Google Cloud Console](https://console.cloud.google.com/).
-    2. Crea un proyecto gratis y busca **YouTube Data API v3** ➔ Hacer clic en **Habilitar**.
-    3. En **Credenciales**, crea un **OAuth 2.0 Client ID**.
-    
-    #### 2️⃣ Instagram Reels (Meta for Developers)
-    1. Entra a [Meta Developers](https://developers.facebook.com/).
-    2. Crea una app de tipo **Business**.
-    3. Agrega el producto **Instagram Graph API** y genera un *User Access Token* de larga duración.
-    
-    #### 3️⃣ X (Twitter) API v2 Free
-    1. Entra a [X Developer Portal](https://developer.x.com/).
-    2. En tu proyecto, entra a **Keys and Tokens**.
-    3. Genera tus **API Key, API Key Secret, Access Token** y **Access Token Secret** (asegúrate de que los permisos estén en *Read and Write*).
-    
-    #### 4️⃣ Reddit API
-    1. Entra a [Reddit App Preferences](https://www.reddit.com/prefs/apps).
-    2. Haz clic en **create another app...** abajo.
-    3. Selecciona la opción **script**, ponle de nombre `TikTokCrossposter` y obtén tu `Client ID` y `Client Secret`.
-    """)
+st.markdown('</div>', unsafe_allow_html=True)
+
+# 3. BARRA DE ESTADO (Fijada abajo)
+processed = load_processed_ids()
+last_post = processed[-1] if processed else "Ninguno"
+st.markdown(f"""
+    <div class="status-bar">
+        <span class="status-dot"></span>
+        Robot Activo &nbsp;|&nbsp; Cuenta: {tiktok_user} &nbsp;|&nbsp; Último procesado: ID {last_post} &nbsp;|&nbsp; Frecuencia: Cada 2 horas
+    </div>
+""", unsafe_allow_html=True)
