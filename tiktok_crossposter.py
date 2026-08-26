@@ -292,14 +292,15 @@ def download_video_via_tikwm(video_info: Dict) -> Tuple[str, str]:
 # PUBLICADORES POR RED SOCIAL
 # ==============================================================================
 
-def publish_to_youtube(video_path: str, caption: str, config: Dict) -> bool:
+def publish_to_youtube(video_path: str, caption: str, config: Dict) -> Tuple[bool, str]:
     refresh_token = config.get("YOUTUBE_REFRESH_TOKEN")
     client_id = config.get("YOUTUBE_CLIENT_ID")
     client_secret = config.get("YOUTUBE_CLIENT_SECRET")
 
     if not all([refresh_token, client_id, client_secret]):
-        print("[YOUTUBE] Omitido: Falta YOUTUBE_REFRESH_TOKEN en GitHub Secrets.")
-        return False
+        msg = "Falta YOUTUBE_REFRESH_TOKEN o credenciales de Google."
+        print(f"[YOUTUBE] Omitido: {msg}")
+        return False, msg
 
     try:
         from google.oauth2.credentials import Credentials
@@ -327,19 +328,22 @@ def publish_to_youtube(video_path: str, caption: str, config: Dict) -> bool:
         }
         media = MediaFileUpload(video_path, chunksize=-1, resumable=True, mimetype="video/mp4")
         resp = youtube.videos().insert(part="snippet,status", body=body, media_body=media).execute()
-        print(f"[YOUTUBE SUCCESS] Publicado! ID: {resp.get('id')}")
-        return True
+        v_id = resp.get("id", "")
+        print(f"[YOUTUBE SUCCESS] Publicado! ID: {v_id}")
+        return True, f"Publicado con éxito (ID: {v_id})"
     except Exception as e:
-        print(f"[YOUTUBE ERROR] {e}")
-        return False
+        msg = str(e)
+        print(f"[YOUTUBE ERROR] {msg}")
+        return False, f"Error: {msg}"
 
-def publish_to_instagram(direct_mp4_url: str, caption: str, config: Dict) -> bool:
+def publish_to_instagram(direct_mp4_url: str, caption: str, config: Dict) -> Tuple[bool, str]:
     ig_user_id = config.get("INSTAGRAM_USER_ID")
     access_token = config.get("INSTAGRAM_ACCESS_TOKEN")
 
     if not all([ig_user_id, access_token]):
-        print("[INSTAGRAM] Omitido: Falta INSTAGRAM_USER_ID o INSTAGRAM_ACCESS_TOKEN.")
-        return False
+        msg = "Falta INSTAGRAM_USER_ID o INSTAGRAM_ACCESS_TOKEN."
+        print(f"[INSTAGRAM] Omitido: {msg}")
+        return False, msg
 
     try:
         print(f"[INSTAGRAM] Creando contenedor de Reel para usuario {ig_user_id}...")
@@ -355,8 +359,9 @@ def publish_to_instagram(direct_mp4_url: str, caption: str, config: Dict) -> boo
         creation_id = res.get("id")
         if not creation_id:
             err = res.get("error", {})
-            print(f"[INSTAGRAM ERROR] No se creo contenedor: {err.get('message', str(res))}")
-            return False
+            err_msg = err.get("message", str(res))
+            print(f"[INSTAGRAM ERROR] No se creó contenedor: {err_msg}")
+            return False, f"Meta API Error: {err_msg}"
 
         print(f"[INSTAGRAM] Contenedor creado (ID: {creation_id}). Esperando procesamiento...")
         status_url = f"https://graph.facebook.com/v18.0/{creation_id}"
@@ -372,8 +377,9 @@ def publish_to_instagram(direct_mp4_url: str, caption: str, config: Dict) -> boo
                 print("[INSTAGRAM] Video procesado. Publicando...")
                 break
             elif code == "ERROR":
-                print(f"[INSTAGRAM ERROR] Error en procesamiento: {status}")
-                return False
+                err_msg = str(status)
+                print(f"[INSTAGRAM ERROR] Error en procesamiento: {err_msg}")
+                return False, f"Error procesamiento Meta: {err_msg}"
             else:
                 print(f"[INSTAGRAM] Estado ({i+1}/15): {code}...")
 
@@ -386,23 +392,25 @@ def publish_to_instagram(direct_mp4_url: str, caption: str, config: Dict) -> boo
 
         if "id" in pub_res:
             print(f"[INSTAGRAM SUCCESS] Reel publicado! ID: {pub_res['id']}")
-            return True
+            return True, f"Reel publicado (ID: {pub_res['id']})"
         else:
-            print(f"[INSTAGRAM ERROR] Fallo al publicar: {pub_res}")
-            return False
+            err_msg = str(pub_res)
+            print(f"[INSTAGRAM ERROR] Falló al publicar: {err_msg}")
+            return False, f"Fallo al publicar Reel: {err_msg}"
     except Exception as e:
         print(f"[INSTAGRAM ERROR] {e}")
-        return False
+        return False, f"Error: {e}"
 
-def publish_to_x(video_path: str, caption: str, config: Dict) -> bool:
+def publish_to_x(video_path: str, caption: str, config: Dict) -> Tuple[bool, str]:
     consumer_key = config.get("X_API_KEY")
     consumer_secret = config.get("X_API_SECRET")
     access_token = config.get("X_ACCESS_TOKEN")
     access_token_secret = config.get("X_ACCESS_TOKEN_SECRET")
 
     if not all([consumer_key, consumer_secret, access_token, access_token_secret]):
-        print("[X TWITTER] Omitido: Faltan credenciales de X (verifica X_ACCESS_TOKEN y X_ACCESS_TOKEN_SECRET).")
-        return False
+        msg = "Faltan credenciales de X (X_ACCESS_TOKEN y X_ACCESS_TOKEN_SECRET)."
+        print(f"[X TWITTER] Omitido: {msg}")
+        return False, msg
 
     try:
         import tweepy
@@ -419,13 +427,15 @@ def publish_to_x(video_path: str, caption: str, config: Dict) -> bool:
             access_token_secret=access_token_secret
         )
         resp = client_v2.create_tweet(text=caption[:270], media_ids=[media.media_id])
-        print(f"[X SUCCESS] Tweet publicado! ID: {resp.data['id']}")
-        return True
+        tw_id = resp.data["id"]
+        print(f"[X SUCCESS] Tweet publicado! ID: {tw_id}")
+        return True, f"Tweet publicado (ID: {tw_id})"
     except Exception as e:
-        print(f"[X TWITTER ERROR] {e}")
-        return False
+        msg = str(e)
+        print(f"[X TWITTER ERROR] {msg}")
+        return False, f"Error X API: {msg}"
 
-def publish_to_reddit(video_path: str, caption: str, config: Dict) -> bool:
+def publish_to_reddit(video_path: str, caption: str, config: Dict) -> Tuple[bool, str]:
     client_id = config.get("REDDIT_CLIENT_ID")
     client_secret = config.get("REDDIT_CLIENT_SECRET")
     username = config.get("REDDIT_USERNAME")
@@ -433,8 +443,9 @@ def publish_to_reddit(video_path: str, caption: str, config: Dict) -> bool:
     subreddit_name = config.get("REDDIT_SUBREDDIT", "videos")
 
     if not all([client_id, client_secret, username, password]):
-        print("[REDDIT] Omitido: Faltan credenciales de Reddit.")
-        return False
+        msg = "Faltan credenciales de Reddit."
+        print(f"[REDDIT] Omitido: {msg}")
+        return False, msg
 
     try:
         import praw
@@ -448,10 +459,11 @@ def publish_to_reddit(video_path: str, caption: str, config: Dict) -> bool:
         subreddit = reddit.subreddit(subreddit_name)
         submission = subreddit.submit(title=caption[:300], selftext=caption)
         print(f"[REDDIT SUCCESS] Publicado en r/{subreddit_name}: {submission.url}")
-        return True
+        return True, f"Publicado en Reddit: {submission.url}"
     except Exception as e:
-        print(f"[REDDIT ERROR] {e}")
-        return False
+        msg = str(e)
+        print(f"[REDDIT ERROR] {msg}")
+        return False, f"Error Reddit API: {msg}"
 
 # ==============================================================================
 # ORQUESTADOR PRINCIPAL
@@ -486,13 +498,13 @@ def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None) -> D
         print("\n[PUBLISHING] Publicando en redes sociales...")
         active = load_active_platforms()
 
-        results["youtube"] = publish_to_youtube(temp_video_file, captions["youtube"], config) if active.get("youtube", True) else False
-        results["instagram"] = publish_to_instagram(direct_mp4_url, captions["instagram"], config) if active.get("instagram", True) else False
-        results["x"] = publish_to_x(temp_video_file, captions["x"], config) if active.get("x", True) else False
-        results["reddit"] = publish_to_reddit(temp_video_file, captions["reddit"], config) if active.get("reddit", True) else False
+        results["youtube"] = publish_to_youtube(temp_video_file, captions["youtube"], config) if active.get("youtube", True) else (False, "Desactivado en canales")
+        results["instagram"] = publish_to_instagram(direct_mp4_url, captions["instagram"], config) if active.get("instagram", True) else (False, "Desactivado en canales")
+        results["x"] = publish_to_x(temp_video_file, captions["x"], config) if active.get("x", True) else (False, "Desactivado en canales")
+        results["reddit"] = publish_to_reddit(temp_video_file, captions["reddit"], config) if active.get("reddit", True) else (False, "Desactivado en canales")
 
         # 4. Guardar como procesado si al menos 1 tuvo éxito
-        success_count = sum(1 for v in results.values() if v)
+        success_count = sum(1 for (ok, _) in results.values() if ok)
         if success_count > 0:
             save_processed_id(video_id)
             print(f"\n[DONE] Video {video_id} marcado como procesado.")
@@ -500,10 +512,8 @@ def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None) -> D
             print(f"\n[WARNING] Ninguna red publicó exitosamente. Video NO marcado como procesado.")
 
         print(f"\n[SUMMARY] =====================================")
-        print(f"[SUMMARY] YouTube   : {'OK' if results.get('youtube') else 'FALLO/OMITIDO'}")
-        print(f"[SUMMARY] Instagram : {'OK' if results.get('instagram') else 'FALLO/OMITIDO'}")
-        print(f"[SUMMARY] X Twitter : {'OK' if results.get('x') else 'FALLO/OMITIDO'}")
-        print(f"[SUMMARY] Reddit    : {'OK' if results.get('reddit') else 'FALLO/OMITIDO'}")
+        for net, (ok, msg) in results.items():
+            print(f"[SUMMARY] {net.capitalize():10}: {'OK' if ok else 'FALLO/OMITIDO'} ({msg})")
         print(f"[SUMMARY] Total: {success_count}/{len(results)} redes publicadas.")
         print(f"[SUMMARY] =====================================\n")
 
@@ -512,7 +522,7 @@ def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None) -> D
             "video_id": video_id,
             "title": title,
             "captions": captions,
-            "results": results
+            "results": {k: ok for k, (ok, _) in results.items()}
         }
 
     except Exception as e:
