@@ -12,7 +12,8 @@ from tiktok_crossposter import (
     load_pending_queue,
     save_pending_queue,
     add_to_pending_queue,
-    remove_from_pending_queue
+    remove_from_pending_queue,
+    get_config
 )
 
 st.set_page_config(
@@ -165,18 +166,26 @@ with tab1:
     st.markdown('<div style="text-align: center; margin-bottom: 20px;">', unsafe_allow_html=True)
     if st.button("⚡ PUBLICAR ÚLTIMO VIDEO AHORA", key="btn_publish_now"):
         with st.spinner("Procesando último video de TikTok y publicando..."):
-            config = dict(os.environ)
+            config = get_config()
             config["FORCE_RUN"] = "1"
             res = run_crosspost_workflow(config)
             
-            if res.get("status") in ["success", "partial_failure"]:
-                st.balloons()
-                st.success(f"¡Publicado exitosamente! Video: {res.get('title')}")
-                for net, ok in res.get("results", {}).items():
+            if res.get("status") in ["success", "partial_failure", "all_failed"]:
+                results = res.get("results", {})
+                details = res.get("details", {})
+                
+                if res.get("status") == "success":
+                    st.balloons()
+                    st.success(f"¡Publicado exitosamente! Video: {res.get('title')}")
+                else:
+                    st.warning(f"Procesado: {res.get('title')}")
+                    
+                for net, ok in results.items():
+                    msg = details.get(net, "Sin detalles")
                     if ok:
-                        st.markdown(f"✅ **{net.capitalize()}**: Publicado con éxito.")
+                        st.markdown(f"✅ **{net.capitalize()}**: {msg}")
                     else:
-                        st.markdown(f"❌ **{net.capitalize()}**: Falló o no configurado.")
+                        st.markdown(f"❌ **{net.capitalize()}**: {msg}")
             elif res.get("status") == "skipped":
                 st.warning("El último video ya fue publicado previamente.")
             else:
@@ -214,6 +223,16 @@ with tab1:
             save_active(new_active)
             st.toast("Canales actualizados.", icon="💾")
             
+        st.divider()
+        st.markdown('<div class="section-title">🔑 Estado de Credenciales / Tokens</div>', unsafe_allow_html=True)
+        
+        cfg = get_config()
+        st.markdown(f"**TikTok:** `@{cfg.get('TIKTOK_USERNAME', tiktok_user)}`")
+        st.markdown(f"**Instagram:** {'✅ Token detectado' if cfg.get('INSTAGRAM_ACCESS_TOKEN') else '❌ Falta INSTAGRAM_ACCESS_TOKEN'}")
+        st.markdown(f"**YouTube:** {'✅ Token detectado' if cfg.get('YOUTUBE_REFRESH_TOKEN') else '❌ Falta YOUTUBE_REFRESH_TOKEN'}")
+        st.markdown(f"**X (Twitter):** {'✅ Tokens detectados' if (cfg.get('X_ACCESS_TOKEN') and cfg.get('X_ACCESS_TOKEN_SECRET')) else '❌ Falta X_ACCESS_TOKEN o Secret'}")
+        st.markdown(f"**Reddit:** {'✅ Credenciales detectadas' if cfg.get('REDDIT_CLIENT_ID') else '❌ Faltan credenciales Reddit'}")
+        
         st.divider()
         st.markdown('<div class="section-title">Ajustes Rápidos</div>', unsafe_allow_html=True)
         new_user = st.text_input("Usuario de TikTok:", value=tiktok_user, key="t1_user")

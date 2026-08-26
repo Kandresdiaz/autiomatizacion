@@ -29,6 +29,38 @@ QUEUE_FILE = "pending_queue.json"
 # UTILIDADES
 # ==============================================================================
 
+def get_config() -> Dict[str, str]:
+    """Obtiene la configuración combinando os.environ, .env y st.secrets de Streamlit."""
+    config = dict(os.environ)
+
+    # Cargar .env local si existe
+    if os.path.exists(".env"):
+        try:
+            with open(".env", "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        config[k.strip()] = v.strip().strip("'\"")
+        except Exception:
+            pass
+
+    # Cargar st.secrets si se está ejecutando dentro de Streamlit
+    try:
+        import streamlit as st
+        if hasattr(st, "secrets") and st.secrets:
+            for k, v in st.secrets.items():
+                if isinstance(v, str):
+                    config[k] = v
+                elif isinstance(v, dict):
+                    for sub_k, sub_v in v.items():
+                        if isinstance(sub_v, str):
+                            config[sub_k] = sub_v
+    except Exception:
+        pass
+
+    return config
+
 def load_processed_ids() -> List[str]:
     if os.path.exists(PROCESSED_FILE):
         try:
@@ -472,7 +504,7 @@ def publish_to_reddit(video_path: str, caption: str, config: Dict) -> Tuple[bool
 def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None) -> Dict:
     """Procesa y publica un único video específico en todas las redes configuradas."""
     if config is None:
-        config = dict(os.environ)
+        config = get_config()
 
     video_id = video_info.get("id", "")
     title = video_info.get("title", "Video de TikTok")
@@ -522,7 +554,8 @@ def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None) -> D
             "video_id": video_id,
             "title": title,
             "captions": captions,
-            "results": {k: ok for k, (ok, _) in results.items()}
+            "results": {k: ok for k, (ok, _) in results.items()},
+            "details": {k: msg for k, (_, msg) in results.items()}
         }
 
     except Exception as e:
@@ -544,7 +577,7 @@ def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
     3. Si no hay videos nuevos pero hay cola pendiente (pending_queue.json), procesa 1 video de la cola.
     """
     if config is None:
-        config = dict(os.environ)
+        config = get_config()
 
     tiktok_username = config.get("TIKTOK_USERNAME", "").strip()
     if not tiktok_username:
