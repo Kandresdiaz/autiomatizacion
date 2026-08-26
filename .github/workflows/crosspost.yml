@@ -46,11 +46,11 @@ jobs:
         run: |
           python tiktok_crossposter.py
 
-      - name: Commit and Push Updated Processed Videos JSON
+      - name: Commit and Push Updated Processed Videos and Queue JSON
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add processed_videos.json
+          git add processed_videos.json pending_queue.json 2>/dev/null || git add processed_videos.json
           git status
-          git diff-index --quiet HEAD || git commit -m "update: processed_videos.json [skip ci]"
+          git diff-index --quiet HEAD || git commit -m "update: processed_videos and pending_queue [skip ci]"
           git push

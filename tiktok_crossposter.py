@@ -20,7 +20,10 @@ try:
 except ImportError:
     pass
 
+import datetime
+
 PROCESSED_FILE = "processed_videos.json"
+QUEUE_FILE = "pending_queue.json"
 
 # ==============================================================================
 # UTILIDADES
@@ -41,6 +44,70 @@ def save_processed_id(video_id: str):
         processed.append(video_id)
         with open(PROCESSED_FILE, "w", encoding="utf-8") as f:
             json.dump(processed, f, indent=2)
+
+def load_pending_queue() -> List[Dict]:
+    """Carga la lista de videos pendientes en cola."""
+    if os.path.exists(QUEUE_FILE):
+        try:
+            with open(QUEUE_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_pending_queue(queue: List[Dict]):
+    """Guarda la lista de videos en cola pendiente."""
+    with open(QUEUE_FILE, "w", encoding="utf-8") as f:
+        json.dump(queue, f, indent=2, ensure_ascii=False)
+
+def add_to_pending_queue(videos: List[Dict]) -> int:
+    """Agrega videos a la cola pendiente omitiendo duplicados."""
+    queue = load_pending_queue()
+    processed = load_processed_ids()
+    existing_ids = {v["id"] for v in queue} | set(processed)
+    
+    added_count = 0
+    for video in videos:
+        if video["id"] not in existing_ids:
+            queue.append(video)
+            existing_ids.add(video["id"])
+            added_count += 1
+            
+    if added_count > 0:
+        save_pending_queue(queue)
+    return added_count
+
+def pop_from_pending_queue() -> Optional[Dict]:
+    """Toma y remueve el primer video de la cola pendiente."""
+    queue = load_pending_queue()
+    if not queue:
+        return None
+    video_info = queue.pop(0)
+    save_pending_queue(queue)
+    return video_info
+
+def remove_from_pending_queue(video_id: str) -> bool:
+    """Elimina un video específico de la cola por su ID."""
+    queue = load_pending_queue()
+    initial_len = len(queue)
+    queue = [v for v in queue if v.get("id") != video_id]
+    if len(queue) != initial_len:
+        save_pending_queue(queue)
+        return True
+    return False
+
+def load_active_platforms() -> Dict[str, bool]:
+    path = "active_platforms.json"
+    default = {"youtube": True, "instagram": True, "x": True, "reddit": True}
+    if os.path.exists(path):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return {k: bool(data.get(k, True)) for k in default}
+        except Exception:
+            return default
+    return default
+
 
 # ==============================================================================
 # GENERADOR DE CAPTIONS CON IA (GEMINI)
@@ -94,12 +161,12 @@ Responde SOLO con un JSON valido con esas 4 claves exactas."""
 
 def fetch_latest_tiktok_videos(username: str, count: int = 10) -> List[Dict]:
     """
-    Obtiene los ultimos videos del perfil de TikTok usando yt-dlp.
-    Devuelve lista de dicts con id, title, webpage_url.
+    Obtiene los últimos videos del perfil de TikTok usando yt-dlp.
+    Devuelve lista de dicts con id, title, webpage_url, upload_date, timestamp, thumbnail, duration.
     """
     clean_username = username.strip().replace("@", "")
     profile_url = f"https://www.tiktok.com/@{clean_username}"
-    print(f"[SEARCH] Buscando videos nuevos en TikTok @{clean_username}...")
+    print(f"[SEARCH] Buscando los últimos {count} videos en TikTok @{clean_username}...")
 
     ydl_opts = {
         'extract_flat': 'in_playlist',
@@ -119,10 +186,33 @@ def fetch_latest_tiktok_videos(username: str, count: int = 10) -> List[Dict]:
                     continue
                 title = e.get('title') or e.get('description') or ""
                 webpage_url = e.get('url') or f"https://www.tiktok.com/@{clean_username}/video/{video_id}"
+                
+                # Extraer miniatura (cover)
+                thumbnail_url = ""
+                thumbnails = e.get('thumbnails') or []
+                if thumbnails and isinstance(thumbnails, list):
+                    thumbnail_url = thumbnails[0].get('url', '')
+                
+                # Extraer timestamp y formato de fecha
+                ts = e.get('timestamp')
+                upload_date_str = ""
+                if ts:
+                    try:
+                        dt = datetime.datetime.fromtimestamp(ts)
+                        upload_date_str = dt.strftime("%Y-%m-%d %H:%M")
+                    except Exception:
+                        pass
+                
+                duration = e.get('duration') or 0
+
                 videos.append({
                     "id": video_id,
                     "title": title,
-                    "webpage_url": webpage_url
+                    "webpage_url": webpage_url,
+                    "timestamp": ts or 0,
+                    "upload_date": upload_date_str,
+                    "thumbnail": thumbnail_url,
+                    "duration": duration
                 })
             if videos:
                 print(f"[SEARCH] {len(videos)} videos encontrados en el perfil.")
@@ -357,67 +447,47 @@ def publish_to_reddit(video_path: str, caption: str, config: Dict) -> bool:
 # ORQUESTADOR PRINCIPAL
 # ==============================================================================
 
-def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
-    """Ejecuta el flujo completo: detectar -> descargar -> publicar en todas las redes."""
+def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None) -> Dict:
+    """Procesa y publica un único video específico en todas las redes configuradas."""
     if config is None:
         config = dict(os.environ)
 
-    tiktok_username = config.get("TIKTOK_USERNAME", "").strip()
-    if not tiktok_username:
-        print("[ERROR] TIKTOK_USERNAME no configurado.")
-        return {"status": "error", "message": "Falta TIKTOK_USERNAME en variables de entorno."}
-
-    # 1. Obtener lista de videos recientes
-    videos = fetch_latest_tiktok_videos(tiktok_username, count=10)
-    if not videos:
-        return {"status": "error", "message": f"No se encontraron videos para @{tiktok_username}."}
-
-    # 2. Filtrar solo los NO procesados
-    processed_ids = load_processed_ids()
-    force_run = bool(config.get("FORCE_RUN"))
-
-    new_videos = [v for v in videos if v["id"] not in processed_ids] if not force_run else videos[:1]
-
-    if not new_videos:
-        latest_id = videos[0]["id"] if videos else "N/A"
-        print(f"[INFO] No hay videos nuevos. El ultimo ID detectado ({latest_id}) ya fue procesado.")
-        return {"status": "skipped", "message": "No hay videos nuevos que procesar."}
-
-    # 3. Procesar el video mas reciente nuevo
-    video_info = new_videos[0]
-    video_id = video_info["id"]
+    video_id = video_info.get("id", "")
+    title = video_info.get("title", "Video de TikTok")
     print(f"\n[START] =====================================")
     print(f"[START] Video ID: {video_id}")
-    print(f"[START] Titulo: {video_info['title'][:70]}")
+    print(f"[START] Título: {title[:70]}")
     print(f"[START] =====================================\n")
 
     temp_video_file = None
     results = {}
 
     try:
-        # 4. Generar captions con IA
-        captions = generate_ai_captions(video_info["title"], config)
+        # 1. Generar captions con IA
+        captions = generate_ai_captions(title, config)
         print(f"[CAPTIONS] YouTube: {captions['youtube'][:60]}")
         print(f"[CAPTIONS] Instagram: {captions['instagram'][:60]}")
         print(f"[CAPTIONS] X: {captions['x'][:60]}\n")
 
-        # 5. Descargar video sin watermark via TikWM
+        # 2. Descargar video sin watermark via TikWM
         temp_video_file, direct_mp4_url = download_video_via_tikwm(video_info)
 
-        # 6. Publicar en todas las redes
+        # 3. Publicar en todas las redes
         print("\n[PUBLISHING] Publicando en redes sociales...")
-        results["youtube"] = publish_to_youtube(temp_video_file, captions["youtube"], config)
-        results["instagram"] = publish_to_instagram(direct_mp4_url, captions["instagram"], config)
-        results["x"] = publish_to_x(temp_video_file, captions["x"], config)
-        results["reddit"] = publish_to_reddit(temp_video_file, captions["reddit"], config)
+        active = load_active_platforms()
 
-        # 7. Guardar como procesado solo si hubo al menos 1 exito
+        results["youtube"] = publish_to_youtube(temp_video_file, captions["youtube"], config) if active.get("youtube", True) else False
+        results["instagram"] = publish_to_instagram(direct_mp4_url, captions["instagram"], config) if active.get("instagram", True) else False
+        results["x"] = publish_to_x(temp_video_file, captions["x"], config) if active.get("x", True) else False
+        results["reddit"] = publish_to_reddit(temp_video_file, captions["reddit"], config) if active.get("reddit", True) else False
+
+        # 4. Guardar como procesado si al menos 1 tuvo éxito
         success_count = sum(1 for v in results.values() if v)
         if success_count > 0:
             save_processed_id(video_id)
             print(f"\n[DONE] Video {video_id} marcado como procesado.")
         else:
-            print(f"\n[WARNING] Ninguna red publico exitosamente. Video NO marcado como procesado para reintentar en proxima ejecucion.")
+            print(f"\n[WARNING] Ninguna red publicó exitosamente. Video NO marcado como procesado.")
 
         print(f"\n[SUMMARY] =====================================")
         print(f"[SUMMARY] YouTube   : {'OK' if results.get('youtube') else 'FALLO/OMITIDO'}")
@@ -430,7 +500,7 @@ def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
         return {
             "status": "success" if success_count > 0 else "all_failed",
             "video_id": video_id,
-            "title": video_info["title"],
+            "title": title,
             "captions": captions,
             "results": results
         }
@@ -445,6 +515,46 @@ def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
                 os.remove(temp_video_file)
             except Exception:
                 pass
+
+def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
+    """
+    Ejecuta el flujo completo:
+    1. Si FORCE_RUN=1, procesa el video más reciente.
+    2. Si hay videos nuevos en TikTok, procesa el más reciente.
+    3. Si no hay videos nuevos pero hay cola pendiente (pending_queue.json), procesa 1 video de la cola.
+    """
+    if config is None:
+        config = dict(os.environ)
+
+    tiktok_username = config.get("TIKTOK_USERNAME", "").strip()
+    if not tiktok_username:
+        print("[ERROR] TIKTOK_USERNAME no configurado.")
+        return {"status": "error", "message": "Falta TIKTOK_USERNAME en variables de entorno."}
+
+    force_run = bool(config.get("FORCE_RUN"))
+
+    # 1. Buscar videos recientes en TikTok
+    videos = fetch_latest_tiktok_videos(tiktok_username, count=10)
+
+    if force_run and videos:
+        print("[WORKFLOW] Ejecución forzada: procesando último video detectado.")
+        return crosspost_single_video(videos[0], config)
+
+    processed_ids = load_processed_ids()
+    new_videos = [v for v in videos if v["id"] not in processed_ids]
+
+    if new_videos:
+        print(f"[WORKFLOW] Nuevo video detectado en el perfil: {new_videos[0]['id']}")
+        return crosspost_single_video(new_videos[0], config)
+
+    # 2. Revisar cola de videos pendientes
+    pending_video = pop_from_pending_queue()
+    if pending_video:
+        print(f"[WORKFLOW] Procesando video guardado en la cola pendiente: {pending_video['id']}")
+        return crosspost_single_video(pending_video, config)
+
+    print("[INFO] No hay videos nuevos ni pendientes en la cola.")
+    return {"status": "skipped", "message": "No hay videos nuevos ni pendientes en cola que procesar."}
 
 if __name__ == "__main__":
     print("[START] TikTok Crossposter con IA - Iniciando...")
