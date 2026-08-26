@@ -247,6 +247,11 @@ with tab2:
         else:
             date_range = None
 
+    # Carga automática inicial si aún no se han consultado los videos
+    if "history_videos" not in st.session_state:
+        with st.spinner(f"Obteniendo los últimos {fetch_count} videos de TikTok @{tiktok_user}..."):
+            st.session_state["history_videos"] = fetch_latest_tiktok_videos(tiktok_user, count=fetch_count)
+
     if st.button("🔄 Cargar / Actualizar Lista de Videos", key="btn_load_history"):
         with st.spinner(f"Obteniendo los últimos {fetch_count} videos de TikTok @{tiktok_user}..."):
             st.session_state["history_videos"] = fetch_latest_tiktok_videos(tiktok_user, count=fetch_count)
