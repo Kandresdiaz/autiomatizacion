@@ -8,6 +8,7 @@ from tiktok_crossposter import (
     crosspost_single_video,
     fetch_latest_tiktok_videos,
     load_processed_ids,
+    remove_processed_id,
     load_pending_queue,
     save_pending_queue,
     add_to_pending_queue,
@@ -329,6 +330,10 @@ with tab2:
             with c_status:
                 if is_proc:
                     st.markdown('<span class="badge-published">✅ Ya Publicado</span>', unsafe_allow_html=True)
+                    if st.button("🔓 Desmarcar", key=f"unproc_{v['id']}"):
+                        remove_processed_id(v['id'])
+                        st.toast(f"Video {v['id']} desmarcado.", icon="🔓")
+                        st.rerun()
                 else:
                     st.markdown('<span class="badge-pending">⏳ Pendiente</span>', unsafe_allow_html=True)
             st.divider()

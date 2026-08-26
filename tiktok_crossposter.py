@@ -45,6 +45,16 @@ def save_processed_id(video_id: str):
         with open(PROCESSED_FILE, "w", encoding="utf-8") as f:
             json.dump(processed, f, indent=2)
 
+def remove_processed_id(video_id: str) -> bool:
+    """Remueve un video de la lista de procesados para permitir volver a publicarlo."""
+    processed = load_processed_ids()
+    if video_id in processed:
+        processed.remove(video_id)
+        with open(PROCESSED_FILE, "w", encoding="utf-8") as f:
+            json.dump(processed, f, indent=2)
+        return True
+    return False
+
 def load_pending_queue() -> List[Dict]:
     """Carga la lista de videos pendientes en cola."""
     if os.path.exists(QUEUE_FILE):
