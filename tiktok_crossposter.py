@@ -613,3 +613,6 @@ if __name__ == "__main__":
     print("[START] TikTok Crossposter con IA - Iniciando...")
     output = run_crosspost_workflow()
     print("\n[RESULT]", json.dumps(output, indent=2, ensure_ascii=False))
+    if output.get("status") in ["all_failed", "error"]:
+        print("\n[FAIL] Ninguna red social logró publicar el video. Revisa los tokens de las APIs.")
+        sys.exit(1)
