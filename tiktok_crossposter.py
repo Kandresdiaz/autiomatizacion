@@ -320,6 +320,23 @@ def download_video_via_tikwm(video_info: Dict) -> Tuple[str, str]:
     print(f"[DOWNLOAD SUCCESS] Video descargado: {output_path} ({total // 1024} KB)")
     return output_path, direct_url
 
+def get_preview_play_url(webpage_url: str) -> Optional[str]:
+    """Obtiene la URL directa de video MP4 desde TikWM para previsualización en el dashboard."""
+    try:
+        res = requests.post(
+            "https://www.tikwm.com/api/",
+            data={"url": webpage_url},
+            timeout=10
+        ).json()
+        if res.get("code") == 0:
+            direct_url = res.get("data", {}).get("play", "")
+            if direct_url and not direct_url.startswith("http"):
+                direct_url = f"https://www.tikwm.com{direct_url}"
+            return direct_url
+    except Exception:
+        pass
+    return None
+
 # ==============================================================================
 # PUBLICADORES POR RED SOCIAL
 # ==============================================================================

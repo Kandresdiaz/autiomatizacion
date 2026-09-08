@@ -13,7 +13,8 @@ from tiktok_crossposter import (
     save_pending_queue,
     add_to_pending_queue,
     remove_from_pending_queue,
-    get_config
+    get_config,
+    get_preview_play_url
 )
 
 st.set_page_config(
@@ -202,8 +203,16 @@ with tab1:
             if videos:
                 latest = videos[0]
                 st.markdown(f"### {latest['title'] or 'Video sin título'}")
-                st.caption(f"TikTok ID: {latest['id']} | Fecha: {latest.get('upload_date', 'N/A')}")
-                st.video(latest['webpage_url'])
+                st.caption(f"TikTok ID: `{latest['id']}` | Fecha: {latest.get('upload_date', 'N/A')}")
+                
+                # Obtener preview directo de video MP4 sin marca de agua
+                play_url = get_preview_play_url(latest['webpage_url'])
+                if play_url:
+                    st.video(play_url)
+                elif latest.get('thumbnail'):
+                    st.image(latest['thumbnail'], use_container_width=True)
+                
+                st.markdown(f"🔗 [Abrir video en TikTok]({latest['webpage_url']})")
             else:
                 st.warning(f"No se detectaron videos para @{tiktok_user}.")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -227,7 +236,8 @@ with tab1:
         st.markdown('<div class="section-title">🔑 Estado de Credenciales / Tokens</div>', unsafe_allow_html=True)
         
         cfg = get_config()
-        st.markdown(f"**TikTok:** `@{cfg.get('TIKTOK_USERNAME', tiktok_user)}`")
+        clean_user = cfg.get('TIKTOK_USERNAME', tiktok_user).strip().lstrip('@')
+        st.markdown(f"**TikTok:** `@{clean_user}`")
         st.markdown(f"**Instagram:** {'✅ Token detectado' if cfg.get('INSTAGRAM_ACCESS_TOKEN') else '❌ Falta INSTAGRAM_ACCESS_TOKEN'}")
         st.markdown(f"**YouTube:** {'✅ Token detectado' if cfg.get('YOUTUBE_REFRESH_TOKEN') else '❌ Falta YOUTUBE_REFRESH_TOKEN'}")
         st.markdown(f"**X (Twitter):** {'✅ Tokens detectados' if (cfg.get('X_ACCESS_TOKEN') and cfg.get('X_ACCESS_TOKEN_SECRET')) else '❌ Falta X_ACCESS_TOKEN o Secret'}")

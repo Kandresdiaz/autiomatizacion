@@ -4,6 +4,21 @@ Todos los cambios notables realizados en este proyecto se registrarán en este a
 
 ---
 
+## [2.2.0] - 2026-09-08
+### ✨ Añadido
+- **Reproductor de Video Nativo en Directo (`get_preview_play_url`):** Integración con la API de streaming de TikWM para reproducir videos MP4 sin marca de agua con controles y audio directamente dentro del dashboard de Streamlit.
+- **Enlace Directo a TikTok:** Acceso rápido para abrir el video original en la plataforma.
+
+### 🛠️ Modificado
+- Corrección de formato del nombre de usuario de TikTok (`@usuario` sin duplicación de arrobas).
+- Limpieza y optimización de la previsualización del último video en la pestaña principal de `app.py`.
+
+### 🐛 Corregido
+- Resuelto problema del reproductor negro con `0:00` en Streamlit que impedía visualizar el video de TikTok.
+- Actualizadas y verificadas las credenciales de API para Instagram Graph API, YouTube Data API v3 y X (Twitter) v2.
+
+---
+
 ## [2.1.0] - 2026-08-26
 ### ✨ Añadido
 - **Skill de Autodocumentación (`.agents/skills/auto-docs-updater/SKILL.md`):** Skill para Antigravity que verifica cambios en Git y actualiza la documentación automáticamente en cada commit.
