@@ -4,6 +4,20 @@ Todos los cambios notables realizados en este proyecto se registrarán en este a
 
 ---
 
+## [2.3.0] - 2026-09-08
+### ✨ Añadido
+- **Verificación en Vivo de YouTube Shorts:** Flujo OAuth 2.0 de Google completado y verificado en producción con canal oficial. Subida exitosa comprobada de Shorts verticales en vivo.
+- **Verificación en Vivo de Instagram Reels:** Integración con Meta Graph API (`instagram_content_publish`) verificada en producción publicando videos limpios descargados desde TikTok.
+
+### 🛠️ Modificado
+- **Diagnóstico de Plataformas en Streamlit:** Actualización de estados y mensajes de error específicos (ej: detección de HTTP 402 en la API de Twitter/X por política de cobro de subida de video).
+- **Documentación y Guía de Secrets:** Actualizada la guía paso a paso para la configuración de secretos tanto en **Streamlit Cloud** como en **GitHub Actions**.
+
+### 🐛 Corregido
+- Renovación de credenciales OAuth de Google Cloud (`YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN`) resolviendo el error de permisos insuficientes y tokens expirados.
+
+---
+
 ## [2.2.0] - 2026-09-08
 ### ✨ Añadido
 - **Reproductor de Video Nativo en Directo (`get_preview_play_url`):** Integración con la API de streaming de TikWM para reproducir videos MP4 sin marca de agua con controles y audio directamente dentro del dashboard de Streamlit.

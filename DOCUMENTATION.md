@@ -86,3 +86,15 @@ Existen 2 entornos independientes donde debes configurar tus llaves según cómo
 - **Opción A (Publicación por Lotes en Vivo):** Permite elegir un tiempo de descanso entre videos (ej: 5 min, 15 min, 1 hora) con barra de progreso.
 - **Opción B (Cola de Automatización):** Guarda los videos en `pending_queue.json` para que GitHub Actions publique 1 video cada 2 horas.
 - **Botón 🔓 Desmarcar:** Permite convertir cualquier video marcado como `✅ Ya Publicado` de vuelta a `⏳ Pendiente` para reintentar su publicación.
+
+---
+
+## 📊 Estado de Redes y Recomendaciones de Distribución
+
+| Red Social | Estado | Recomendación | Notas Técnicas |
+| :--- | :--- | :--- | :--- |
+| **YouTube Shorts** | ✅ **Operacional** | **Imprescindible** | Flujo OAuth 2.0 con scope `youtube.upload`. Los videos se publican como Shorts públicos con SEO optimizado. |
+| **Instagram Reels** | ✅ **Operacional** | **Imprescindible** | Meta Graph API profesional. Carga directa del video MP4 en CDN de TikWM sin marcas de agua. |
+| **X (Twitter)** | ⚠️ **De Pago (API)** | Opcional / Desactivar | La API gratuita de X solo permite texto. Para subir videos MP4 por API, X exige suscripción Basic ($100/mes) o da error `402 Pago requerido`. |
+| **Reddit** | ⚠️ **Desactivar** | No recomendado | Reddit no es una red de video corto personal. Los moderadores de subreddits penalizan o banean publicaciones automatizadas. |
+
