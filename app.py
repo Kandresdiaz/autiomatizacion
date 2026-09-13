@@ -1,8 +1,14 @@
 import os
+import sys
 import json
 import time
 import datetime
+import importlib
 import streamlit as st
+
+import tiktok_crossposter
+importlib.reload(tiktok_crossposter)
+
 from tiktok_crossposter import (
     run_crosspost_workflow,
     crosspost_single_video,
@@ -387,7 +393,7 @@ with tab2:
             c_check, c_thumb, c_info, c_status = st.columns([0.4, 1.2, 3.5, 1.5])
             
             with c_check:
-                is_selected = st.checkbox("", value=st.session_state.get(f"select_{v['id']}", False), key=f"select_{v['id']}")
+                is_selected = st.checkbox("Seleccionar", value=st.session_state.get(f"select_{v['id']}", False), key=f"select_{v['id']}", label_visibility="collapsed")
                 if is_selected:
                     selected_videos.append(v)
                     
