@@ -405,6 +405,7 @@ def publish_to_instagram(direct_mp4_url: str, caption: str, config: Dict) -> Tup
             "media_type": "REELS",
             "video_url": direct_mp4_url,
             "caption": caption,
+            "share_to_feed": "true",
             "access_token": access_token
         }
         res = requests.post(container_url, data=payload, timeout=30).json()
@@ -497,12 +498,12 @@ def publish_to_x(video_path: str, caption: str, config: Dict, video_url: str = "
         print(f"[X TWITTER ERROR] {msg}")
         return False, f"Error X API: {msg}"
 
-def publish_to_reddit(video_path: str, caption: str, config: Dict) -> Tuple[bool, str]:
+def publish_to_reddit(video_path: str, caption: str, config: Dict, video_url: str = "") -> Tuple[bool, str]:
     client_id = config.get("REDDIT_CLIENT_ID")
     client_secret = config.get("REDDIT_CLIENT_SECRET")
     username = config.get("REDDIT_USERNAME")
     password = config.get("REDDIT_PASSWORD")
-    subreddit_name = config.get("REDDIT_SUBREDDIT", "videos")
+    subreddit_name = config.get("REDDIT_SUBREDDIT", "").strip() or f"u_{username}"
 
     if not all([client_id, client_secret, username, password]):
         msg = "Faltan credenciales de Reddit."
@@ -518,10 +519,14 @@ def publish_to_reddit(video_path: str, caption: str, config: Dict) -> Tuple[bool
             password=password,
             user_agent="TikTokCrossposter/1.0"
         )
+        post_text = caption
+        if video_url and video_url not in post_text:
+            post_text = f"{caption}\n\n🎬 Ver video original: {video_url}"
+
         subreddit = reddit.subreddit(subreddit_name)
-        submission = subreddit.submit(title=caption[:300], selftext=caption)
+        submission = subreddit.submit(title=caption[:280], selftext=post_text)
         print(f"[REDDIT SUCCESS] Publicado en r/{subreddit_name}: {submission.url}")
-        return True, f"Publicado en Reddit: {submission.url}"
+        return True, f"Publicado en Reddit (r/{subreddit_name}): {submission.url}"
     except Exception as e:
         msg = str(e)
         print(f"[REDDIT ERROR] {msg}")
@@ -563,7 +568,7 @@ def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None) -> D
         results["youtube"] = publish_to_youtube(temp_video_file, captions["youtube"], config) if active.get("youtube", True) else (False, "Desactivado en canales")
         results["instagram"] = publish_to_instagram(direct_mp4_url, captions["instagram"], config) if active.get("instagram", True) else (False, "Desactivado en canales")
         results["x"] = publish_to_x(temp_video_file, captions["x"], config, video_url=video_info.get("webpage_url", "")) if active.get("x", True) else (False, "Desactivado en canales")
-        results["reddit"] = publish_to_reddit(temp_video_file, captions["reddit"], config) if active.get("reddit", True) else (False, "Desactivado en canales")
+        results["reddit"] = publish_to_reddit(temp_video_file, captions["reddit"], config, video_url=video_info.get("webpage_url", "")) if active.get("reddit", True) else (False, "Desactivado en canales")
 
         # 4. Guardar como procesado si al menos 1 tuvo éxito
         success_count = sum(1 for (ok, _) in results.values() if ok)
