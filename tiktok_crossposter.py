@@ -454,32 +454,41 @@ def publish_to_instagram(direct_mp4_url: str, caption: str, config: Dict) -> Tup
         print(f"[INSTAGRAM ERROR] {e}")
         return False, f"Error: {e}"
 
-def publish_to_x(video_path: str, caption: str, config: Dict) -> Tuple[bool, str]:
+def publish_to_x(video_path: str, caption: str, config: Dict, video_url: str = "") -> Tuple[bool, str]:
     consumer_key = config.get("X_API_KEY")
     consumer_secret = config.get("X_API_SECRET")
     access_token = config.get("X_ACCESS_TOKEN")
     access_token_secret = config.get("X_ACCESS_TOKEN_SECRET")
 
     if not all([consumer_key, consumer_secret, access_token, access_token_secret]):
-        msg = "Faltan credenciales de X (X_ACCESS_TOKEN y X_ACCESS_TOKEN_SECRET)."
+        msg = "Faltan credenciales de X."
         print(f"[X TWITTER] Omitido: {msg}")
         return False, msg
 
     try:
         import tweepy
-        print("[X TWITTER] Subiendo video a X...")
-        auth = tweepy.OAuth1UserHandler(consumer_key, consumer_secret, access_token, access_token_secret)
-        api_v1 = tweepy.API(auth)
-
-        media = api_v1.media_upload(filename=video_path, media_category="tweet_video")
-
         client_v2 = tweepy.Client(
             consumer_key=consumer_key,
             consumer_secret=consumer_secret,
             access_token=access_token,
             access_token_secret=access_token_secret
         )
-        resp = client_v2.create_tweet(text=caption[:270], media_ids=[media.media_id])
+
+        media_id = None
+        try:
+            print("[X TWITTER] Intentando subir video nativo a X...")
+            auth = tweepy.OAuth1UserHandler(consumer_key, consumer_secret, access_token, access_token_secret)
+            api_v1 = tweepy.API(auth)
+            media = api_v1.media_upload(filename=video_path, media_category="tweet_video")
+            media_id = media.media_id
+        except Exception as media_err:
+            print(f"[X TWITTER INFO] Subida directa de video MP4 restringida en plan gratuito de X ({media_err}). Publicando tweet con enlace y vista previa.")
+
+        tweet_text = caption[:270]
+        if not media_id and video_url:
+            tweet_text = f"{caption[:200]}\n\n🎬 {video_url}"
+
+        resp = client_v2.create_tweet(text=tweet_text, media_ids=[media_id] if media_id else None)
         tw_id = resp.data["id"]
         print(f"[X SUCCESS] Tweet publicado! ID: {tw_id}")
         return True, f"Tweet publicado (ID: {tw_id})"
@@ -553,7 +562,7 @@ def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None) -> D
 
         results["youtube"] = publish_to_youtube(temp_video_file, captions["youtube"], config) if active.get("youtube", True) else (False, "Desactivado en canales")
         results["instagram"] = publish_to_instagram(direct_mp4_url, captions["instagram"], config) if active.get("instagram", True) else (False, "Desactivado en canales")
-        results["x"] = publish_to_x(temp_video_file, captions["x"], config) if active.get("x", True) else (False, "Desactivado en canales")
+        results["x"] = publish_to_x(temp_video_file, captions["x"], config, video_url=video_info.get("webpage_url", "")) if active.get("x", True) else (False, "Desactivado en canales")
         results["reddit"] = publish_to_reddit(temp_video_file, captions["reddit"], config) if active.get("reddit", True) else (False, "Desactivado en canales")
 
         # 4. Guardar como procesado si al menos 1 tuvo éxito
