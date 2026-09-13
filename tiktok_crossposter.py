@@ -570,6 +570,21 @@ def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None) -> D
         print(f"[SUMMARY] Total: {success_count}/{len(results)} redes publicadas.")
         print(f"[SUMMARY] =====================================\n")
 
+        # Generar reporte visual para GitHub Actions Step Summary
+        step_summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+        if step_summary_path:
+            try:
+                with open(step_summary_path, "a", encoding="utf-8") as f:
+                    f.write(f"### ⚡ TikTok Crossposter: {title}\n\n")
+                    f.write(f"- **Video ID:** `{video_id}`\n")
+                    f.write(f"- **Resultado:** {'✅ Éxito' if success_count > 0 else '❌ Falló'}\n\n")
+                    f.write("| Red Social | Estado | Detalle |\n| :--- | :---: | :--- |\n")
+                    for net, (ok, msg) in results.items():
+                        f.write(f"| **{net.capitalize()}** | {'✅ OK' if ok else '❌ Error'} | {msg} |\n")
+                    f.write("\n---\n")
+            except Exception:
+                pass
+
         return {
             "status": "success" if success_count > 0 else "all_failed",
             "video_id": video_id,
