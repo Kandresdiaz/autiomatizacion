@@ -196,6 +196,7 @@ with tab1:
             elif res.get("status") == "skipped":
                 st.warning("El último video ya fue publicado previamente.")
             else:
+                st.error(f"Error: {res.get('message')}")
     st.markdown('</div>', unsafe_allow_html=True)
 
     with st.expander("🔗 Publicar por Enlace Directo (Pega cualquier link de TikTok)", expanded=False):
