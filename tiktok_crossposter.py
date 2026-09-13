@@ -215,6 +215,10 @@ def fetch_latest_tiktok_videos(username: str, count: int = 10) -> List[Dict]:
         'playlistend': count,
         'quiet': True,
         'no_warnings': True,
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+        }
     }
 
     try:
@@ -586,15 +590,49 @@ def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None) -> D
             except Exception:
                 pass
 
-def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
+def crosspost_from_url(video_url: str, config: Optional[Dict] = None) -> Dict:
     """
-    Ejecuta el flujo completo:
-    1. Si FORCE_RUN=1, procesa el video más reciente.
-    2. Si hay videos nuevos en TikTok, procesa el más reciente.
-    3. Si no hay videos nuevos pero hay cola pendiente (pending_queue.json), procesa 1 video de la cola.
+    Publica directamente cualquier video a partir de su enlace (URL de TikTok, etc.)
+    sin depender de si yt-dlp logró escanear el perfil.
     """
     if config is None:
         config = get_config()
+    
+    clean_url = video_url.strip()
+    # Extraer ID numérico si está presente en la URL
+    video_id = ""
+    if "/video/" in clean_url:
+        try:
+            video_id = clean_url.split("/video/")[1].split("?")[0].split("/")[0]
+        except Exception:
+            video_id = ""
+    if not video_id:
+        import hashlib
+        video_id = hashlib.md5(clean_url.encode("utf-8")).hexdigest()[:16]
+
+    video_info = {
+        "id": video_id,
+        "webpage_url": clean_url,
+        "title": ""
+    }
+    print(f"[DIRECT URL] Procesando publicación directa desde URL: {clean_url}")
+    return crosspost_single_video(video_info, config)
+
+def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
+    """
+    Ejecuta el flujo completo:
+    1. Si se pasa VIDEO_URL en config, procesa directamente esa URL.
+    2. Si FORCE_RUN=1, procesa el video más reciente.
+    3. Si hay videos nuevos en TikTok, procesa el más reciente.
+    4. Si no hay videos nuevos pero hay cola pendiente (pending_queue.json), procesa 1 video de la cola.
+    """
+    if config is None:
+        config = get_config()
+
+    direct_url = config.get("VIDEO_URL", "").strip()
+    if direct_url:
+        print(f"[WORKFLOW] Enlace directo provisto: {direct_url}")
+        return crosspost_from_url(direct_url, config)
 
     tiktok_username = config.get("TIKTOK_USERNAME", "").strip()
     if not tiktok_username:
@@ -628,7 +666,11 @@ def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
 
 if __name__ == "__main__":
     print("[START] TikTok Crossposter con IA - Iniciando...")
-    output = run_crosspost_workflow()
+    if len(sys.argv) > 1 and sys.argv[1].startswith("http"):
+        print(f"[START] Argumento recibido: {sys.argv[1]}")
+        output = crosspost_from_url(sys.argv[1])
+    else:
+        output = run_crosspost_workflow()
     print("\n[RESULT]", json.dumps(output, indent=2, ensure_ascii=False))
     if output.get("status") in ["all_failed", "error"]:
         print("\n[FAIL] Ninguna red social logró publicar el video. Revisa los tokens de las APIs.")

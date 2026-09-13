@@ -2,7 +2,7 @@ name: TikTok Crossposter Workflow
 
 on:
   schedule:
-    - cron: '0 */2 * * *'  # Se ejecuta cada 2 horas automáticamente
+    - cron: '*/30 * * * *'  # Se ejecuta automáticamente cada 30 minutos
   workflow_dispatch:        # Permite botón de activación manual en GitHub
 
 permissions:

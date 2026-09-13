@@ -6,6 +6,7 @@ import streamlit as st
 from tiktok_crossposter import (
     run_crosspost_workflow,
     crosspost_single_video,
+    crosspost_from_url,
     fetch_latest_tiktok_videos,
     load_processed_ids,
     remove_processed_id,
@@ -15,6 +16,11 @@ from tiktok_crossposter import (
     remove_from_pending_queue,
     get_config,
     get_preview_play_url
+)
+from ai_assistant import (
+    detect_ai_provider,
+    save_ai_key_to_env,
+    generate_video_script
 )
 
 st.set_page_config(
@@ -158,7 +164,7 @@ tiktok_user = os.getenv("TIKTOK_USERNAME", "@b00kevin")
 st.markdown('<div class="main-container">', unsafe_allow_html=True)
 st.title("🤖 TikTok Multi-Platform Command Center")
 
-tab1, tab2 = st.tabs(["⚡ Panel Principal", "📅 Programador de Historial"])
+tab1, tab2, tab3 = st.tabs(["⚡ Panel Principal", "📅 Programador de Historial", "💡 Ideas & Guiones IA (Opcional)"])
 
 # ==============================================================================
 # TAB 1: PANEL PRINCIPAL
@@ -190,8 +196,43 @@ with tab1:
             elif res.get("status") == "skipped":
                 st.warning("El último video ya fue publicado previamente.")
             else:
-                st.error(f"Error: {res.get('message')}")
     st.markdown('</div>', unsafe_allow_html=True)
+
+    with st.expander("🔗 Publicar por Enlace Directo (Pega cualquier link de TikTok)", expanded=False):
+        st.write("¿Tienes un enlace específico o no quieres esperar a que el escáner lo detecte? Pégalo aquí:")
+        col_url1, col_url2 = st.columns([3, 1])
+        with col_url1:
+            direct_url_input = st.text_input(
+                "Enlace del video:",
+                placeholder="https://www.tiktok.com/@b00kevin/video/...",
+                key="input_direct_url_app",
+                label_visibility="collapsed"
+            )
+        with col_url2:
+            btn_publish_direct = st.button("🚀 Publicar Link", key="btn_publish_direct_link")
+
+        if btn_publish_direct:
+            if direct_url_input.strip():
+                with st.spinner("Descargando video sin marca de agua y publicando a los canales activos..."):
+                    res_dir = crosspost_from_url(direct_url_input.strip())
+                    if res_dir.get("status") in ["success", "partial_failure", "all_failed"]:
+                        results_dir = res_dir.get("results", {})
+                        details_dir = res_dir.get("details", {})
+                        if res_dir.get("status") == "success":
+                            st.balloons()
+                            st.success(f"¡Publicado exitosamente! {res_dir.get('title', '')}")
+                        else:
+                            st.warning(f"Finalizado con detalles: {res_dir.get('title', '')}")
+                        for net_d, ok_d in results_dir.items():
+                            msg_d = details_dir.get(net_d, "Sin detalles")
+                            if ok_d:
+                                st.markdown(f"✅ **{net_d.capitalize()}**: {msg_d}")
+                            else:
+                                st.markdown(f"❌ **{net_d.capitalize()}**: {msg_d}")
+                    else:
+                        st.error(f"Error: {res_dir.get('message')}")
+            else:
+                st.warning("Por favor pega un enlace de TikTok válido.")
 
     col_left, col_right = st.columns([1.2, 1])
 
@@ -213,6 +254,10 @@ with tab1:
                     st.image(latest['thumbnail'], use_container_width=True)
                 
                 st.markdown(f"🔗 [Abrir video en TikTok]({latest['webpage_url']})")
+                if st.button("💡 Usar este video para crear nuevos guiones con IA", key="btn_ai_seed_latest"):
+                    st.session_state["ai_selected_video"] = latest
+                    st.session_state["ai_source_type"] = "Último video de TikTok"
+                    st.toast("¡Video enviado al Asistente de Guiones IA! Ve a la pestaña '💡 Ideas & Guiones IA'.", icon="💡")
             else:
                 st.warning(f"No se detectaron videos para @{tiktok_user}.")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -355,6 +400,10 @@ with tab2:
                 st.markdown(f"**{v['title'] or 'Sin título'}**")
                 st.caption(f"ID: `{v['id']}` | Fecha TikTok: {v.get('upload_date', 'N/A')}")
                 st.markdown(f"[Ver en TikTok]({v['webpage_url']})")
+                if st.button("💡 Crear Guion IA", key=f"ai_seed_{v['id']}"):
+                    st.session_state["ai_selected_video"] = v
+                    st.session_state["ai_source_type"] = f"Video: {v.get('title', v['id'])[:30]}"
+                    st.toast(f"¡Video {v['id']} cargado en 'Ideas & Guiones IA'!", icon="💡")
                 
             with c_status:
                 if is_proc:
@@ -442,6 +491,130 @@ with tab2:
                 st.toast("Cola vaciada.", icon="🗑️")
                 st.rerun()
 
+    st.markdown('</div>', unsafe_allow_html=True)
+
+# ==============================================================================
+# TAB 3: IDEAS & GUIONES IA (OPCIONAL)
+# ==============================================================================
+with tab3:
+    st.markdown('<div class="controls-panel">', unsafe_allow_html=True)
+    st.markdown('<div class="section-title">💡 Generador de Guiones de Alta Retención (Microganchos 3-5s)</div>', unsafe_allow_html=True)
+    st.write("Crea guiones cinematográficos y dinámicos para Shorts/Reels/TikTok a partir de tus videos o ideas nuevas, sin frases clichés ni rodeos.")
+    
+    ai_provider, ai_key = detect_ai_provider()
+    
+    if not ai_provider:
+        st.info("ℹ️ **Esta función es 100% opcional.** Si quieres usarla, solo necesitas una API Key de IA gratuita.")
+        
+        with st.expander("🔑 Configuración Rápida en 30 segundos (Recomendado: Google Gemini GRATIS)", expanded=True):
+            st.markdown("""
+            **¿Cómo obtener tu clave de Google Gemini sin pagar nada y sin tarjeta de crédito?**
+            1. Entra a **[Google AI Studio (aistudio.google.com)](https://aistudio.google.com/)** con tu cuenta de Gmail.
+            2. Haz clic en **'Get API key'** y luego en **'Create API key'**.
+            3. Cópiala y pégala aquí abajo:
+            """)
+            
+            c_key1, c_key2 = st.columns([3, 1])
+            with c_key1:
+                gemini_input = st.text_input("Ingresa tu GEMINI_API_KEY:", type="password", placeholder="AIzaSy...")
+            with c_key2:
+                st.write("")
+                st.write("")
+                if st.button("💾 Guardar Clave", key="btn_save_gemini_key"):
+                    if gemini_input.strip():
+                        if save_ai_key_to_env("GEMINI_API_KEY", gemini_input.strip()):
+                            st.success("¡Clave Gemini guardada con éxito en .env!")
+                            st.rerun()
+                    else:
+                        st.warning("Por favor escribe o pega una clave válida.")
+                        
+            st.caption("Nota: También puedes usar `GROQ_API_KEY` u `OPENAI_API_KEY` en tu archivo `.env` si prefieres Llama 3 o ChatGPT.")
+    else:
+        # Proveedor detectado
+        st.success(f"🟢 **Asistente de IA Activo:** Proveedor detectado (`{ai_provider.upper()}`). Listo para generar.")
+        
+        col_ai1, col_ai2 = st.columns([1.2, 1])
+        
+        with col_ai1:
+            st.markdown("#### 1. ¿En qué video o idea nos basamos?")
+            
+            preloaded_video = st.session_state.get("ai_selected_video")
+            preloaded_title = preloaded_video.get("title", "") if preloaded_video else ""
+            preloaded_url = preloaded_video.get("webpage_url", "") if preloaded_video else ""
+            
+            source_choice = st.radio(
+                "Origen del contenido:",
+                ["Video seleccionado / precargado", "Escribir idea o tema libre", "Pegar URL o título manual"],
+                index=0 if preloaded_video else 1
+            )
+            
+            video_payload = {}
+            if source_choice == "Video seleccionado / precargado":
+                if preloaded_video:
+                    st.info(f"📌 **Video cargado:** {preloaded_title or 'Sin título'} (`ID: {preloaded_video.get('id')}`)")
+                    video_payload = {
+                        "title": preloaded_title,
+                        "description": preloaded_title,
+                        "url": preloaded_url
+                    }
+                else:
+                    st.warning("No has seleccionado ningún video aún. Puedes ir a 'Panel Principal' o 'Programador de Historial' y pulsar '💡 Crear Guion IA', o elegir 'Escribir idea o tema libre'.")
+            elif source_choice == "Escribir idea o tema libre":
+                user_idea = st.text_area(
+                    "¿De qué quieres que hable el video?",
+                    placeholder="Ejemplo: Por qué los programadores no deberían usar loops infinitos / Cómo ganar clientes...",
+                    height=100
+                )
+                video_payload = {"user_idea": user_idea}
+            else:
+                manual_title = st.text_input("Título o tema del video:", placeholder="Ej: Las 3 herramientas que uso a diario...")
+                manual_url = st.text_input("Link de referencia (opcional):", placeholder="https://www.tiktok.com/@...")
+                video_payload = {"title": manual_title, "url": manual_url}
+                
+        with col_ai2:
+            st.markdown("#### 2. Configuración de Retención")
+            style_opt = st.selectbox(
+                "Ángulo psicológico del guion:",
+                [
+                    ("disruptive", "🔥 Polémico / Disruptivo (Rompe mitos / Ataca un error)"),
+                    ("quick_tutorial", "⚡ Tutorial Express (Paso a paso sin relleno)"),
+                    ("storytelling", "📖 Historia / Conflicto Rápido (Storytelling de 30s)"),
+                    ("top3_errors", "⚠️ Top 3 Errores Críticos (Alta curiosidad)")
+                ],
+                format_func=lambda x: x[1]
+            )[0]
+            
+            duration_opt = st.select_slider(
+                "Duración estimada del video:",
+                options=[15, 30, 45, 60],
+                value=30,
+                format_func=lambda x: f"{x} segundos"
+            )
+            
+        st.divider()
+        if st.button("⚡ GENERAR GUION DE ALTO IMPACTO (MICROGANCHOS CADA 3-5s)", key="btn_run_ai_gen"):
+            if not video_payload.get("title") and not video_payload.get("user_idea"):
+                st.error("Por favor define un tema o selecciona un video para que la IA sepa de qué escribir.")
+            else:
+                with st.spinner("Creando estructura de microganchos y guion de alta retención..."):
+                    result = generate_video_script(video_payload, style=style_opt, target_duration=duration_opt)
+                    if result.get("success"):
+                        st.session_state["ai_generated_result"] = result.get("content")
+                        st.toast("¡Guion generado con éxito!", icon="✨")
+                    else:
+                        st.error(f"Error al generar: {result.get('message')}")
+                        
+        if "ai_generated_result" in st.session_state:
+            st.markdown("### 📝 Guion y Estrategia Generada")
+            st.markdown(st.session_state["ai_generated_result"])
+            
+            st.download_button(
+                label="📥 Descargar Guion (.txt / .md)",
+                data=st.session_state["ai_generated_result"],
+                file_name="guion_tiktok_microganchos.md",
+                mime="text/markdown"
+            )
+            
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('</div>', unsafe_allow_html=True)

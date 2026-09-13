@@ -2,6 +2,32 @@
 
 Todos los cambios notables realizados en este proyecto se registrarán en este archivo.
 
+## [2.5.0] - 2026-09-13
+### ✨ Añadido
+- **Publicación por Enlace Directo (`crosspost_from_url`):** Permite procesar y publicar cualquier video pegando su enlace directo en `app.py` o pasándolo como argumento CLI (`python tiktok_crossposter.py <URL>`), sin depender del escaneo del perfil.
+- **Tolerancia a Fallos Multicanal:** El sistema publica de forma independiente en cada red; si alguna plataforma falla por tokens expirados (ej: Meta Graph API o X), las plataformas activas y funcionales (como YouTube Shorts) completan la subida y el video se marca como procesado sin abortar.
+- **Cabeceras de Navegador Real Anti-Bot:** Adición de cabeceras HTTP de navegador en `yt-dlp` para evitar bloqueos por parte de TikTok en entornos cloud (GitHub Actions).
+
+### 🛠️ Modificado
+- `app.py`: Añadido acordeón de publicación rápida por URL directa en la pestaña principal.
+- `DOCUMENTATION.md`: Actualizada guía de resolución de tokens (Meta 60 días, X OAuth 1.0a) y resumen de operatividad.
+
+### 🚀 Verificado en Producción
+- Subida exitosa y comprobada en vivo de videos de TikTok a YouTube Shorts (IDs: `hC6OeBdDTVU` y `avL-dt7Sax0`).
+
+---
+
+## [2.4.0] - 2026-09-09
+### ✨ Añadido
+- **Módulo `ai_assistant.py` (100% Opcional):** Motor de generación de guiones de alta retención para Reels, TikTok y YouTube Shorts con microganchos cada 3 a 5 segundos.
+- **Detección Multi-Proveedor:** Soporta Google Gemini (`GEMINI_API_KEY`, recomendado y gratuito), Groq (`GROQ_API_KEY`) y OpenAI (`OPENAI_API_KEY`) sin dependencias pesadas adicionales (usa llamadas REST directas con `requests`).
+- **Pestaña `💡 Ideas & Guiones IA (Opcional)` en `app.py`:** Dashboard interactivo para generar guiones a partir del último video, videos del historial, URLs o ideas desde cero.
+- **Acceso Directo desde Videos:** Botones de inspiración en el Panel Principal y en el Programador de Historial para enviar cualquier video al asistente con un solo clic.
+- **Exportación de Guiones:** Descarga de guiones formateados con tabla de tiempos, audio, indicaciones visuales y 3 ganchos A/B testing.
+
+### 🛠️ Modificado
+- `DOCUMENTATION.md`: Documentada la arquitectura del módulo de IA, variables de entorno opcionales y guía de configuración gratuita en 30 segundos vía Google AI Studio.
+
 ---
 
 ## [2.3.0] - 2026-09-08
