@@ -2,7 +2,15 @@
 
 Todos los cambios notables realizados en este proyecto se registrarán en este archivo.
 
-## [2.5.0] - 2026-09-13
+## [2.6.0] - 2026-09-17
+### 🐛 Corregido
+- **Protección contra Re-publicación de Histórico Antiguo:** Limitada la detección automática en `run_crosspost_workflow` exclusivamente a los 3 videos más recientes del perfil de TikTok. Se evita que el scraper excave en el backlog histórico de videos viejos que el creador ya había publicado manualmente en Instagram u otras redes.
+- **Sincronización Total del Historial TikTok:** Registrados en `processed_videos.json` todos los videos existentes en la cuenta `@b00kevin` (40 videos) para prevenir publicaciones retroactivas duplicadas.
+
+### ✨ Añadido
+- **Soporte `share_to_feed` en Instagram Reels:** Inclusión del parámetro `share_to_feed: true` en el contenedor de Meta Graph API para asegurar que los Reels aparezcan en el feed principal y se compartan sin fricción en Facebook.
+- **Integración Reddit con Enlace Original y Fallback a Perfil de Usuario:** Mejora en `publish_to_reddit` para adjuntar el enlace original del video y utilizar automáticamente el perfil de usuario (`u/{username}`) si no se define un subreddit específico.
+- **Secretos en GitHub Actions:** Añadidos `REDDIT_SUBREDDIT` y `GEMINI_API_KEY` al workflow `.github/workflows/crosspost.yml`.
 ### ✨ Añadido
 - **Publicación por Enlace Directo (`crosspost_from_url`):** Permite procesar y publicar cualquier video pegando su enlace directo en `app.py` o pasándolo como argumento CLI (`python tiktok_crossposter.py <URL>`), sin depender del escaneo del perfil.
 - **Tolerancia a Fallos Multicanal:** El sistema publica de forma independiente en cada red; si alguna plataforma falla por tokens expirados (ej: Meta Graph API o X), las plataformas activas y funcionales (como YouTube Shorts) completan la subida y el video se marca como procesado sin abortar.
