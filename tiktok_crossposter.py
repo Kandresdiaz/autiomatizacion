@@ -24,6 +24,7 @@ import datetime
 
 PROCESSED_FILE = "processed_videos.json"
 QUEUE_FILE = "pending_queue.json"
+STATUS_FILE = "platform_status.json"
 
 # ==============================================================================
 # UTILIDADES
@@ -137,6 +138,55 @@ def remove_from_pending_queue(video_id: str) -> bool:
         save_pending_queue(queue)
         return True
     return False
+
+def load_platform_status() -> Dict[str, Dict]:
+    """Carga el estado de publicacion por red social de cada video ya intentado."""
+    if os.path.exists(STATUS_FILE):
+        try:
+            with open(STATUS_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_platform_status(status: Dict[str, Dict]):
+    with open(STATUS_FILE, "w", encoding="utf-8") as f:
+        json.dump(status, f, indent=2, ensure_ascii=False)
+
+def update_platform_status(video_info: Dict, results: Dict[str, Tuple[bool, str]]):
+    """Registra que redes lograron publicar (o no) un video especifico."""
+    status = load_platform_status()
+    video_id = video_info.get("id", "")
+    entry = status.get(video_id, {"title": "", "webpage_url": "", "platforms": {}})
+    entry["title"] = video_info.get("title") or entry.get("title", "")
+    entry["webpage_url"] = video_info.get("webpage_url") or entry.get("webpage_url", "")
+    for net, (ok, _msg) in results.items():
+        entry["platforms"][net] = bool(ok)
+    status[video_id] = entry
+    save_platform_status(status)
+
+def find_incomplete_video() -> Optional[Tuple[Dict, List[str]]]:
+    """
+    Busca el video mas antiguo que tenga alguna red activa aun sin publicar
+    (ej: fallo por token vencido en una corrida anterior) para reintentar
+    solo esas redes, sin tocar las que ya publicaron exitosamente.
+    """
+    active = load_active_platforms()
+    status = load_platform_status()
+    for video_id, entry in status.items():
+        platforms_done = entry.get("platforms", {})
+        missing = [
+            net for net, is_active in active.items()
+            if is_active and not platforms_done.get(net, False)
+        ]
+        if missing:
+            video_info = {
+                "id": video_id,
+                "title": entry.get("title", ""),
+                "webpage_url": entry.get("webpage_url", "")
+            }
+            return video_info, missing
+    return None
 
 def load_active_platforms() -> Dict[str, bool]:
     path = "active_platforms.json"
@@ -536,8 +586,12 @@ def publish_to_reddit(video_path: str, caption: str, config: Dict, video_url: st
 # ORQUESTADOR PRINCIPAL
 # ==============================================================================
 
-def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None) -> Dict:
-    """Procesa y publica un único video específico en todas las redes configuradas."""
+def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None, only_platforms: Optional[List[str]] = None) -> Dict:
+    """
+    Procesa y publica un único video específico en todas las redes configuradas.
+    Si only_platforms se especifica, solo se reintentan esas redes (las demas
+    se consideran ya publicadas exitosamente en un intento previo).
+    """
     if config is None:
         config = get_config()
 
@@ -561,16 +615,23 @@ def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None) -> D
         # 2. Descargar video sin watermark via TikWM
         temp_video_file, direct_mp4_url = download_video_via_tikwm(video_info)
 
-        # 3. Publicar en todas las redes
+        # 3. Publicar en todas las redes (u omitir las que ya se publicaron antes)
         print("\n[PUBLISHING] Publicando en redes sociales...")
         active = load_active_platforms()
 
-        results["youtube"] = publish_to_youtube(temp_video_file, captions["youtube"], config) if active.get("youtube", True) else (False, "Desactivado en canales")
-        results["instagram"] = publish_to_instagram(direct_mp4_url, captions["instagram"], config) if active.get("instagram", True) else (False, "Desactivado en canales")
-        results["x"] = publish_to_x(temp_video_file, captions["x"], config, video_url=video_info.get("webpage_url", "")) if active.get("x", True) else (False, "Desactivado en canales")
-        results["reddit"] = publish_to_reddit(temp_video_file, captions["reddit"], config, video_url=video_info.get("webpage_url", "")) if active.get("reddit", True) else (False, "Desactivado en canales")
+        def _should_attempt(net: str) -> bool:
+            return only_platforms is None or net in only_platforms
 
-        # 4. Guardar como procesado si al menos 1 tuvo éxito
+        if only_platforms is not None:
+            print(f"[RETRY] Reintentando solo: {', '.join(only_platforms)} (el resto ya se habia publicado)")
+
+        results["youtube"] = publish_to_youtube(temp_video_file, captions["youtube"], config) if active.get("youtube", True) and _should_attempt("youtube") else ((True, "Ya publicado previamente (omitido)") if active.get("youtube", True) else (False, "Desactivado en canales"))
+        results["instagram"] = publish_to_instagram(direct_mp4_url, captions["instagram"], config) if active.get("instagram", True) and _should_attempt("instagram") else ((True, "Ya publicado previamente (omitido)") if active.get("instagram", True) else (False, "Desactivado en canales"))
+        results["x"] = publish_to_x(temp_video_file, captions["x"], config, video_url=video_info.get("webpage_url", "")) if active.get("x", True) and _should_attempt("x") else ((True, "Ya publicado previamente (omitido)") if active.get("x", True) else (False, "Desactivado en canales"))
+        results["reddit"] = publish_to_reddit(temp_video_file, captions["reddit"], config, video_url=video_info.get("webpage_url", "")) if active.get("reddit", True) and _should_attempt("reddit") else ((True, "Ya publicado previamente (omitido)") if active.get("reddit", True) else (False, "Desactivado en canales"))
+
+        # 4. Registrar estado por red y guardar como procesado si al menos 1 tuvo éxito
+        update_platform_status(video_info, results)
         success_count = sum(1 for (ok, _) in results.values() if ok)
         if success_count > 0:
             save_processed_id(video_id)
@@ -653,7 +714,10 @@ def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
     1. Si se pasa VIDEO_URL en config, procesa directamente esa URL.
     2. Si FORCE_RUN=1, procesa el video más reciente.
     3. Si hay videos nuevos en TikTok, procesa el más reciente.
-    4. Si no hay videos nuevos pero hay cola pendiente (pending_queue.json), procesa 1 video de la cola.
+    4. Si algun video previo quedo con redes activas sin publicar (ej: token vencido
+       en su momento), reintenta SOLO esas redes para ese video.
+    5. Si no hay videos nuevos ni pendientes por reintentar pero hay cola
+       (pending_queue.json), procesa 1 video de la cola.
     """
     if config is None:
         config = get_config()
@@ -687,7 +751,15 @@ def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
         print(f"[WORKFLOW] Nuevo video reciente detectado en el perfil: {new_videos[0]['id']}")
         return crosspost_single_video(new_videos[0], config)
 
-    # 2. Revisar cola de videos pendientes
+    # 2. Reintentar redes que quedaron pendientes en algun video ya procesado
+    #    (ej: publicacion parcial por un token vencido que ya fue renovado)
+    incomplete = find_incomplete_video()
+    if incomplete:
+        video_info, missing_platforms = incomplete
+        print(f"[WORKFLOW] Video {video_info['id']} tiene redes pendientes: {', '.join(missing_platforms)}. Reintentando...")
+        return crosspost_single_video(video_info, config, only_platforms=missing_platforms)
+
+    # 3. Revisar cola de videos pendientes
     pending_video = pop_from_pending_queue()
     if pending_video:
         print(f"[WORKFLOW] Procesando video guardado en la cola pendiente: {pending_video['id']}")
