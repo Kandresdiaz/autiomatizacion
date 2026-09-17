@@ -678,10 +678,13 @@ def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
         return crosspost_single_video(videos[0], config)
 
     processed_ids = load_processed_ids()
-    new_videos = [v for v in videos if v["id"] not in processed_ids]
+    # Solo consideramos los videos más recientes (top 3) para evitar
+    # publicar videos antiguos del historial que el usuario ya había subido antes
+    recent_candidates = videos[:3] if len(videos) >= 3 else videos
+    new_videos = [v for v in recent_candidates if v["id"] not in processed_ids]
 
     if new_videos:
-        print(f"[WORKFLOW] Nuevo video detectado en el perfil: {new_videos[0]['id']}")
+        print(f"[WORKFLOW] Nuevo video reciente detectado en el perfil: {new_videos[0]['id']}")
         return crosspost_single_video(new_videos[0], config)
 
     # 2. Revisar cola de videos pendientes
