@@ -331,14 +331,31 @@ def download_video_via_tikwm(video_info: Dict) -> Tuple[str, str]:
     webpage_url = video_info.get("webpage_url", "")
     print(f"[TIKWM] Obteniendo .mp4 sin watermark para: {webpage_url}")
 
-    res = requests.post(
-        "https://www.tikwm.com/api/",
-        data={"url": webpage_url},
-        timeout=20
-    ).json()
+    # TikWM a veces responde vacio/HTML a los runners de GitHub: reintentar con espera
+    res = None
+    last_err = ""
+    for attempt in range(1, 5):
+        resp = None
+        try:
+            resp = requests.post(
+                "https://www.tikwm.com/api/",
+                data={"url": webpage_url, "hd": "1"},
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"},
+                timeout=20
+            )
+            res = resp.json()
+            if res.get("code") == 0:
+                break
+            last_err = res.get("msg", "unknown")
+        except Exception as e:
+            last_err = f"HTTP {resp.status_code}: {e}" if resp is not None else str(e)
+        res = None
+        print(f"[TIKWM] Intento {attempt}/4 fallido ({last_err}). Reintentando...")
+        time.sleep(5 * attempt)
 
-    if res.get("code") != 0:
-        raise RuntimeError(f"TikWM error: {res.get('msg', 'unknown')}")
+    if res is None:
+        print(f"[TIKWM] No disponible ({last_err}). Usando yt-dlp como respaldo.")
+        return download_video_via_ytdlp(video_info)
 
     data = res.get("data", {})
     direct_url = data.get("play", "")
@@ -373,6 +390,29 @@ def download_video_via_tikwm(video_info: Dict) -> Tuple[str, str]:
 
     print(f"[DOWNLOAD SUCCESS] Video descargado: {output_path} ({total // 1024} KB)")
     return output_path, direct_url
+
+def download_video_via_ytdlp(video_info: Dict) -> Tuple[str, str]:
+    """
+    Respaldo cuando TikWM no responde: descarga con yt-dlp.
+    No hay URL publica del mp4, asi que Instagram (que la necesita) no podra publicar.
+    """
+    webpage_url = video_info.get("webpage_url", "")
+    temp_dir = tempfile.mkdtemp()
+    output_path = os.path.join(temp_dir, "video.mp4")
+    ydl_opts = {
+        'outtmpl': output_path,
+        'format': 'best[ext=mp4]/best',
+        'quiet': True,
+        'no_warnings': True,
+    }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(webpage_url, download=True)
+    if info and info.get("title") and not video_info.get("title", "").strip():
+        video_info["title"] = info["title"]
+    if not os.path.exists(output_path) or os.path.getsize(output_path) < 10000:
+        raise RuntimeError("yt-dlp no pudo descargar el video.")
+    print(f"[DOWNLOAD SUCCESS] Video descargado con yt-dlp: {output_path} ({os.path.getsize(output_path) // 1024} KB)")
+    return output_path, ""
 
 def get_preview_play_url(webpage_url: str) -> Optional[str]:
     """Obtiene la URL directa de video MP4 desde TikWM para previsualización en el dashboard."""
@@ -445,6 +485,11 @@ def publish_to_instagram(direct_mp4_url: str, caption: str, config: Dict) -> Tup
 
     if not all([ig_user_id, access_token]):
         msg = "Falta INSTAGRAM_USER_ID o INSTAGRAM_ACCESS_TOKEN."
+        print(f"[INSTAGRAM] Omitido: {msg}")
+        return False, msg
+
+    if not direct_mp4_url:
+        msg = "Sin URL publica del mp4 (TikWM no disponible). Se reintentara en la proxima corrida."
         print(f"[INSTAGRAM] Omitido: {msg}")
         return False, msg
 
