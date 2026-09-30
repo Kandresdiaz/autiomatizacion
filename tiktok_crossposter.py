@@ -350,8 +350,9 @@ def download_video_via_tikwm(video_info: Dict) -> Tuple[str, str]:
         except Exception as e:
             last_err = f"HTTP {resp.status_code}: {e}" if resp is not None else str(e)
         res = None
-        print(f"[TIKWM] Intento {attempt}/4 fallido ({last_err}). Reintentando...")
-        time.sleep(5 * attempt)
+        print(f"[TIKWM] Intento {attempt}/4 fallido ({last_err}).")
+        if attempt < 4:
+            time.sleep(5 * attempt)
 
     if res is None:
         print(f"[TIKWM] No disponible ({last_err}). Usando yt-dlp como respaldo.")
