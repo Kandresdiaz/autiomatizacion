@@ -165,27 +165,66 @@ def update_platform_status(video_info: Dict, results: Dict[str, Tuple[bool, str]
     status[video_id] = entry
     save_platform_status(status)
 
-def find_incomplete_video() -> Optional[Tuple[Dict, List[str]]]:
+def find_incomplete_video(config: Optional[Dict] = None) -> Optional[Tuple[Dict, List[str]]]:
     """
     Busca el video mas antiguo que tenga alguna red activa aun sin publicar
     (ej: fallo por token vencido en una corrida anterior) para reintentar
     solo esas redes, sin tocar las que ya publicaron exitosamente.
+
+    Solo cuenta como "pendiente" una red cuyas credenciales sirven AHORA. Sin
+    ese filtro, un video al que solo le faltaban redes imposibles de publicar
+    (X sin plan de pago, Reddit sin credenciales) se devolvia en cada corrida y
+    consumia el reintento para siempre, dejando a los videos a los que de
+    verdad les falta YouTube o Instagram sin volver a intentarse nunca.
     """
     active = load_active_platforms()
     status = load_platform_status()
+    if config is None:
+        config = get_config()
+
+    validadores = {
+        "youtube": check_youtube_credentials,
+        "instagram": check_instagram_credentials,
+        "x": check_x_credentials,
+        "reddit": check_reddit_credentials,
+    }
+    cache: Dict[str, bool] = {}
+
+    def _credenciales_sirven(net: str) -> bool:
+        if net not in cache:
+            validador = validadores.get(net)
+            if validador is None:
+                cache[net] = True
+            else:
+                ok, detalle = validador(config)
+                cache[net] = ok
+                if not ok:
+                    print(f"[RETRY] Se omite {net} en los reintentos: {detalle[:160]}")
+        return cache[net]
+
+    pendientes = []
     for video_id, entry in status.items():
-        platforms_done = entry.get("platforms", {})
-        missing = [
+        publicadas = entry.get("platforms", {})
+        faltantes = [
             net for net, is_active in active.items()
-            if is_active and not platforms_done.get(net, False)
+            if is_active and not publicadas.get(net, False)
         ]
-        if missing:
+        if faltantes:
+            pendientes.append((video_id, entry, faltantes))
+
+    for video_id, entry, faltantes in pendientes:
+        viables = [net for net in faltantes if _credenciales_sirven(net)]
+        if viables:
             video_info = {
                 "id": video_id,
                 "title": entry.get("title", ""),
                 "webpage_url": entry.get("webpage_url", "")
             }
-            return video_info, missing
+            return video_info, viables
+
+    if pendientes:
+        print(f"[RETRY] Hay {len(pendientes)} video(s) con redes pendientes, pero ninguna "
+              "tiene credenciales validas ahora mismo. No se reintenta nada.")
     return None
 
 def load_active_platforms() -> Dict[str, bool]:
@@ -436,49 +475,144 @@ def get_preview_play_url(webpage_url: str) -> Optional[str]:
 # PUBLICADORES POR RED SOCIAL
 # ==============================================================================
 
+YOUTUBE_SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+
+def _youtube_error_hint(raw: str) -> str:
+    """Traduce los errores crudos de Google a una instruccion concreta de que hacer."""
+    low = raw.lower()
+    if "deleted_client" in low:
+        return ("El cliente OAuth de Google fue ELIMINADO de Google Cloud Console. "
+                "Crea credenciales nuevas (OAuth client ID tipo 'Desktop app') y vuelve a generar el "
+                "refresh token con: python generate_youtube_token.py")
+    if "invalid_client" in low:
+        return ("YOUTUBE_CLIENT_ID o YOUTUBE_CLIENT_SECRET no coinciden con un cliente OAuth valido. "
+                "Revisalos en Google Cloud Console > Credenciales.")
+    if "unauthorized_client" in low:
+        return ("El cliente OAuth no es del tipo correcto. Debe ser 'Desktop app' / 'Aplicacion de escritorio'. "
+                "Recrealo y ejecuta: python generate_youtube_token.py")
+    if "invalid_grant" in low:
+        return ("El YOUTUBE_REFRESH_TOKEN ya no sirve (revocado, caducado por app en modo 'Testing' "
+                "a los 7 dias, o generado con OTRO client_id). Regeneralo con: python generate_youtube_token.py")
+    if "invalid_scope" in low or "insufficientpermissions" in low or "insufficient authentication" in low:
+        return ("El token no tiene el permiso de subida. Regeneralo autorizando el scope "
+                "youtube.upload con: python generate_youtube_token.py")
+    if "accessnotconfigured" in low or "has not been used in project" in low or "is disabled" in low:
+        return ("La 'YouTube Data API v3' esta deshabilitada en tu proyecto de Google Cloud. "
+                "Activala en APIs y servicios > Biblioteca.")
+    if "uploadlimitexceeded" in low:
+        return "Alcanzaste el limite diario de subidas del canal. Reintenta en 24 h."
+    if "quotaexceeded" in low or "dailylimitexceeded" in low:
+        return ("Se agoto la cuota diaria de la YouTube Data API (cada subida cuesta ~1600 unidades de "
+                "las 10.000 diarias: ~6 videos/dia). Espera el reset o pide mas cuota.")
+    if "youtubesignuprequired" in low:
+        return "La cuenta de Google autorizada no tiene un canal de YouTube creado. Crea el canal primero."
+    if "forbidden" in low and "videos.insert" in low:
+        return "La cuenta autorizada no tiene permiso para subir a ese canal. Reautoriza con la cuenta dueña del canal."
+    return ""
+
 def publish_to_youtube(video_path: str, caption: str, config: Dict) -> Tuple[bool, str]:
     refresh_token = config.get("YOUTUBE_REFRESH_TOKEN")
     client_id = config.get("YOUTUBE_CLIENT_ID")
     client_secret = config.get("YOUTUBE_CLIENT_SECRET")
 
-    if not all([refresh_token, client_id, client_secret]):
-        msg = "Falta YOUTUBE_REFRESH_TOKEN o credenciales de Google."
+    faltantes = [k for k, v in (
+        ("YOUTUBE_CLIENT_ID", client_id),
+        ("YOUTUBE_CLIENT_SECRET", client_secret),
+        ("YOUTUBE_REFRESH_TOKEN", refresh_token),
+    ) if not v]
+    if faltantes:
+        msg = f"Faltan credenciales de Google: {', '.join(faltantes)}."
+        print(f"[YOUTUBE] Omitido: {msg}")
+        return False, msg
+
+    if not video_path or not os.path.exists(video_path):
+        msg = "No hay archivo de video local para subir (fallo la descarga del mp4)."
         print(f"[YOUTUBE] Omitido: {msg}")
         return False, msg
 
     try:
         from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request as GoogleRequest
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaFileUpload
+    except ImportError as e:
+        msg = f"Falta dependencia de Google ({e}). Ejecuta: pip install -r requirements.txt"
+        print(f"[YOUTUBE ERROR] {msg}")
+        return False, msg
 
-        creds = Credentials(
-            token=None,
-            refresh_token=refresh_token,
-            token_uri="https://oauth2.googleapis.com/token",
-            client_id=client_id,
-            client_secret=client_secret
-        )
-        youtube = build("youtube", "v3", credentials=creds)
+    creds = Credentials(
+        token=None,
+        refresh_token=refresh_token,
+        token_uri="https://oauth2.googleapis.com/token",
+        client_id=client_id,
+        client_secret=client_secret,
+        scopes=YOUTUBE_SCOPES,
+    )
+
+    # Paso 1: canjear el refresh token ANTES de subir, para distinguir un problema
+    # de credenciales de un problema de la subida en si.
+    try:
+        print("[YOUTUBE] Renovando access token con el refresh token...")
+        creds.refresh(GoogleRequest())
+        print("[YOUTUBE] Token OK.")
+    except Exception as e:
+        raw = str(e)
+        hint = _youtube_error_hint(raw)
+        print(f"[YOUTUBE ERROR] No se pudo renovar el token: {raw}")
+        if hint:
+            print(f"[YOUTUBE SOLUCION] {hint}")
+        return False, f"Auth fallida: {raw}" + (f" -> {hint}" if hint else "")
+
+    # Paso 2: subir el video (resumable, con reintentos por chunk)
+    try:
+        youtube = build("youtube", "v3", credentials=creds, cache_discovery=False)
+        titulo = (caption or "Video de TikTok").strip().replace("\n", " ")[:95] or "Video de TikTok"
         body = {
             "snippet": {
-                "title": caption[:90],
+                "title": titulo,
                 "description": f"{caption}\n\n#Shorts #Viral #TikTok",
-                "categoryId": "22"
+                "categoryId": "22",
             },
             "status": {
                 "privacyStatus": "public",
-                "selfDeclaredMadeForKids": False
-            }
+                "selfDeclaredMadeForKids": False,
+            },
         }
-        media = MediaFileUpload(video_path, chunksize=-1, resumable=True, mimetype="video/mp4")
-        resp = youtube.videos().insert(part="snippet,status", body=body, media_body=media).execute()
+        size_mb = os.path.getsize(video_path) / (1024 * 1024)
+        print(f"[YOUTUBE] Subiendo '{titulo[:50]}' ({size_mb:.1f} MB)...")
+
+        media = MediaFileUpload(video_path, chunksize=4 * 1024 * 1024, resumable=True, mimetype="video/mp4")
+        request = youtube.videos().insert(part="snippet,status", body=body, media_body=media)
+
+        resp = None
+        errores_seguidos = 0
+        while resp is None:
+            try:
+                status, resp = request.next_chunk()
+                if status:
+                    print(f"[YOUTUBE] Progreso: {int(status.progress() * 100)}%")
+                errores_seguidos = 0
+            except Exception as chunk_err:
+                raw = str(chunk_err)
+                transitorio = any(t in raw for t in ("500", "502", "503", "504", "backendError", "Connection", "timed out"))
+                errores_seguidos += 1
+                if transitorio and errores_seguidos <= 4:
+                    espera = 2 ** errores_seguidos
+                    print(f"[YOUTUBE] Error transitorio ({raw[:120]}). Reintentando en {espera}s...")
+                    time.sleep(espera)
+                    continue
+                raise
+
         v_id = resp.get("id", "")
-        print(f"[YOUTUBE SUCCESS] Publicado! ID: {v_id}")
-        return True, f"Publicado con éxito (ID: {v_id})"
+        print(f"[YOUTUBE SUCCESS] Publicado! https://youtube.com/shorts/{v_id}")
+        return True, f"Publicado con exito (ID: {v_id})"
     except Exception as e:
-        msg = str(e)
-        print(f"[YOUTUBE ERROR] {msg}")
-        return False, f"Error: {msg}"
+        raw = str(e)
+        hint = _youtube_error_hint(raw)
+        print(f"[YOUTUBE ERROR] {raw}")
+        if hint:
+            print(f"[YOUTUBE SOLUCION] {hint}")
+        return False, f"Error: {raw}" + (f" -> {hint}" if hint else "")
 
 def publish_to_instagram(direct_mp4_url: str, caption: str, config: Dict) -> Tuple[bool, str]:
     ig_user_id = config.get("INSTAGRAM_USER_ID")
@@ -594,39 +728,307 @@ def publish_to_x(video_path: str, caption: str, config: Dict, video_url: str = "
         print(f"[X TWITTER ERROR] {msg}")
         return False, f"Error X API: {msg}"
 
-def publish_to_reddit(video_path: str, caption: str, config: Dict, video_url: str = "") -> Tuple[bool, str]:
-    client_id = config.get("REDDIT_CLIENT_ID")
-    client_secret = config.get("REDDIT_CLIENT_SECRET")
-    username = config.get("REDDIT_USERNAME")
-    password = config.get("REDDIT_PASSWORD")
-    subreddit_name = config.get("REDDIT_SUBREDDIT", "").strip() or f"u_{username}"
+def _reddit_error_hint(raw: str) -> str:
+    """Traduce los errores crudos de Reddit a una instruccion concreta de que hacer."""
+    low = raw.lower()
+    if "401" in low or "invalid_grant" in low or "unauthorized" in low:
+        return ("Usuario/contrasena de Reddit rechazados. Verifica REDDIT_USERNAME (sin u/) y "
+                "REDDIT_PASSWORD. Si tienes 2FA activo, REDDIT_PASSWORD debe ser "
+                "tupassword:123456 (con el codigo TOTP), o desactiva 2FA para este bot.")
+    if "received 403" in low or "forbidden" in low:
+        return ("Reddit devolvio 403. Normalmente la app no es del tipo correcto: en "
+                "reddit.com/prefs/apps la app debe ser de tipo script y creada por el MISMO "
+                "usuario de REDDIT_USERNAME.")
+    if "subreddit_notallowed" in low:
+        return "No tienes permiso para publicar en ese subreddit. Usa tu perfil (deja REDDIT_SUBREDDIT vacio) u otro sub."
+    if "no_videos" in low or "not allowed to post" in low or "invalid_option" in low:
+        return "Ese subreddit no acepta videos nativos; se intenta como enlace automaticamente."
+    if "flair" in low and "required" in low:
+        return ("Ese subreddit exige flair. Define REDDIT_FLAIR_ID (o REDDIT_FLAIR_TEXT) con un flair "
+                "valido del subreddit.")
+    if "ratelimit" in low:
+        return "Reddit te esta limitando por publicar muy seguido. Espera unos minutos y reintenta."
+    if "too_long" in low:
+        return "El titulo supera los 300 caracteres permitidos por Reddit."
+    if "no module named" in low and "praw" in low:
+        return "Falta la libreria praw. Ejecuta: pip install -r requirements.txt"
+    return ""
 
-    if not all([client_id, client_secret, username, password]):
-        msg = "Faltan credenciales de Reddit."
+def _extract_thumbnail(video_path: str) -> Optional[str]:
+    """Saca un frame del video para usarlo de miniatura en Reddit. Best-effort: si no hay ffmpeg, None."""
+    import shutil
+    import subprocess
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg or not video_path or not os.path.exists(video_path):
+        return None
+    thumb = os.path.join(tempfile.gettempdir(), f"thumb_{os.path.basename(video_path)}.png")
+    try:
+        subprocess.run(
+            [ffmpeg, "-y", "-loglevel", "error", "-ss", "0.5", "-i", video_path,
+             "-frames:v", "1", "-q:v", "3", thumb],
+            timeout=60, check=True,
+        )
+        return thumb if os.path.exists(thumb) and os.path.getsize(thumb) > 0 else None
+    except Exception:
+        return None
+
+def publish_to_reddit(video_path: str, caption: str, config: Dict, video_url: str = "") -> Tuple[bool, str]:
+    """
+    Publica en Reddit intentando, en orden:
+      1. Video nativo subido a Reddit (lo que mas alcance tiene).
+      2. Post de enlace al TikTok original.
+      3. Post de texto con el enlace.
+    """
+    client_id = config.get("REDDIT_CLIENT_ID", "").strip()
+    client_secret = config.get("REDDIT_CLIENT_SECRET", "").strip()
+    username = config.get("REDDIT_USERNAME", "").strip().lstrip("/")
+    if username.lower().startswith("u/"):
+        username = username[2:]
+    password = config.get("REDDIT_PASSWORD", "").strip()
+    subreddit_name = config.get("REDDIT_SUBREDDIT", "").strip().lstrip("/")
+    if subreddit_name.lower().startswith("r/"):
+        subreddit_name = subreddit_name[2:]
+    flair_id = config.get("REDDIT_FLAIR_ID", "").strip() or None
+    flair_text = config.get("REDDIT_FLAIR_TEXT", "").strip() or None
+
+    faltantes = [k for k, v in (
+        ("REDDIT_CLIENT_ID", client_id),
+        ("REDDIT_CLIENT_SECRET", client_secret),
+        ("REDDIT_USERNAME", username),
+        ("REDDIT_PASSWORD", password),
+    ) if not v]
+    if faltantes:
+        msg = (f"Faltan credenciales de Reddit: {', '.join(faltantes)}. "
+               "Crea una app tipo script en https://www.reddit.com/prefs/apps")
         print(f"[REDDIT] Omitido: {msg}")
         return False, msg
 
+    # Sin subreddit configurado se publica en el perfil propio (u_usuario), que siempre permite video.
+    subreddit_name = subreddit_name or f"u_{username}"
+
     try:
         import praw
+    except ImportError as e:
+        msg = f"Falta dependencia praw ({e}). Ejecuta: pip install -r requirements.txt"
+        print(f"[REDDIT ERROR] {msg}")
+        return False, msg
+
+    try:
         reddit = praw.Reddit(
             client_id=client_id,
             client_secret=client_secret,
             username=username,
             password=password,
-            user_agent="TikTokCrossposter/1.0"
+            user_agent=f"python:tiktok-crossposter:2.7 (by /u/{username})",
         )
-        post_text = caption
-        if video_url and video_url not in post_text:
-            post_text = f"{caption}\n\n🎬 Ver video original: {video_url}"
-
-        subreddit = reddit.subreddit(subreddit_name)
-        submission = subreddit.submit(title=caption[:280], selftext=post_text)
-        print(f"[REDDIT SUCCESS] Publicado en r/{subreddit_name}: {submission.url}")
-        return True, f"Publicado en Reddit (r/{subreddit_name}): {submission.url}"
+        # Falla rapido y claro si las credenciales no sirven, antes de subir el mp4.
+        me = reddit.user.me()
+        print(f"[REDDIT] Autenticado como u/{me}. Destino: r/{subreddit_name}")
     except Exception as e:
-        msg = str(e)
-        print(f"[REDDIT ERROR] {msg}")
-        return False, f"Error Reddit API: {msg}"
+        raw = str(e)
+        hint = _reddit_error_hint(raw)
+        print(f"[REDDIT ERROR] Auth fallida: {raw}")
+        if hint:
+            print(f"[REDDIT SOLUCION] {hint}")
+        return False, f"Auth fallida: {raw}" + (f" -> {hint}" if hint else "")
+
+    titulo = (caption or "Video de TikTok").strip().replace("\n", " ")[:300] or "Video de TikTok"
+    cuerpo = caption or ""
+    if video_url and video_url not in cuerpo:
+        cuerpo = f"{cuerpo}\n\nVideo original: {video_url}".strip()
+
+    subreddit = reddit.subreddit(subreddit_name)
+    flair_kwargs = {}
+    if flair_id:
+        flair_kwargs["flair_id"] = flair_id
+    if flair_text:
+        flair_kwargs["flair_text"] = flair_text
+
+    intentos_fallidos = []
+
+    # --- Intento 1: video nativo ---
+    if video_path and os.path.exists(video_path):
+        thumb = None
+        try:
+            size_mb = os.path.getsize(video_path) / (1024 * 1024)
+            print(f"[REDDIT] Subiendo video nativo ({size_mb:.1f} MB)...")
+            thumb = _extract_thumbnail(video_path)
+            if hasattr(type(subreddit), "submit_video"):
+                # praw 7.x
+                submission = subreddit.submit_video(
+                    title=titulo, video_path=video_path, thumbnail_path=thumb,
+                    without_websockets=True, **flair_kwargs
+                )
+            else:
+                # praw 8.x: submit() unificado con PostMedia
+                from praw.models import PostMedia
+                media = {"media": PostMedia(video_path)}
+                if thumb:
+                    media["thumbnail"] = PostMedia(thumb)
+                submission = subreddit.submit(
+                    titulo, video=media, without_websockets=True, **flair_kwargs
+                )
+
+            # without_websockets=True no devuelve objeto: el post si se creo.
+            if submission is not None:
+                link = f"https://reddit.com{submission.permalink}"
+            else:
+                link = f"https://reddit.com/r/{subreddit_name}"
+            print(f"[REDDIT SUCCESS] Video nativo publicado en r/{subreddit_name}: {link}")
+            return True, f"Video publicado en Reddit (r/{subreddit_name}): {link}"
+        except Exception as e:
+            raw = str(e)
+            intentos_fallidos.append(f"video nativo: {raw[:160]}")
+            hint = _reddit_error_hint(raw)
+            print(f"[REDDIT INFO] Video nativo fallo ({raw[:200]}). Probando como enlace...")
+            if hint:
+                print(f"[REDDIT SOLUCION] {hint}")
+        finally:
+            if thumb and os.path.exists(thumb):
+                try:
+                    os.remove(thumb)
+                except Exception:
+                    pass
+    else:
+        intentos_fallidos.append("video nativo: no habia archivo mp4 local")
+
+    # --- Intento 2: post de enlace ---
+    if video_url:
+        try:
+            submission = subreddit.submit(titulo, url=video_url, **flair_kwargs)
+            link = f"https://reddit.com{submission.permalink}"
+            print(f"[REDDIT SUCCESS] Enlace publicado en r/{subreddit_name}: {link}")
+            return True, f"Enlace publicado en Reddit (r/{subreddit_name}): {link}"
+        except Exception as e:
+            raw = str(e)
+            intentos_fallidos.append(f"enlace: {raw[:160]}")
+            print(f"[REDDIT INFO] Post de enlace fallo ({raw[:200]}). Probando como texto...")
+
+    # --- Intento 3: post de texto ---
+    try:
+        submission = subreddit.submit(titulo, selftext=cuerpo or titulo, **flair_kwargs)
+        link = f"https://reddit.com{submission.permalink}"
+        print(f"[REDDIT SUCCESS] Post de texto publicado en r/{subreddit_name}: {link}")
+        return True, f"Post publicado en Reddit (r/{subreddit_name}): {link}"
+    except Exception as e:
+        raw = str(e)
+        intentos_fallidos.append(f"texto: {raw[:160]}")
+        hint = _reddit_error_hint(raw)
+        print(f"[REDDIT ERROR] Todos los intentos fallaron: {' | '.join(intentos_fallidos)}")
+        if hint:
+            print(f"[REDDIT SOLUCION] {hint}")
+        return False, f"Error Reddit API: {raw}" + (f" -> {hint}" if hint else "")
+
+# ==============================================================================
+# DIAGNOSTICO DE CREDENCIALES (sin publicar nada)
+# ==============================================================================
+
+def check_youtube_credentials(config: Dict) -> Tuple[bool, str]:
+    """Canjea el refresh token sin subir nada. Dice exactamente que esta mal."""
+    refresh_token = config.get("YOUTUBE_REFRESH_TOKEN")
+    client_id = config.get("YOUTUBE_CLIENT_ID")
+    client_secret = config.get("YOUTUBE_CLIENT_SECRET")
+    faltantes = [k for k, v in (
+        ("YOUTUBE_CLIENT_ID", client_id),
+        ("YOUTUBE_CLIENT_SECRET", client_secret),
+        ("YOUTUBE_REFRESH_TOKEN", refresh_token),
+    ) if not v]
+    if faltantes:
+        return False, f"Faltan: {', '.join(faltantes)}"
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request as GoogleRequest
+        creds = Credentials(
+            token=None, refresh_token=refresh_token,
+            token_uri="https://oauth2.googleapis.com/token",
+            client_id=client_id, client_secret=client_secret, scopes=YOUTUBE_SCOPES,
+        )
+        creds.refresh(GoogleRequest())
+        return True, "Token valido, listo para subir Shorts."
+    except Exception as e:
+        raw = str(e)
+        hint = _youtube_error_hint(raw)
+        return False, f"{raw}" + (f" -> {hint}" if hint else "")
+
+
+def check_instagram_credentials(config: Dict) -> Tuple[bool, str]:
+    ig_user_id = config.get("INSTAGRAM_USER_ID")
+    token = config.get("INSTAGRAM_ACCESS_TOKEN")
+    if not ig_user_id or not token:
+        return False, "Faltan INSTAGRAM_USER_ID o INSTAGRAM_ACCESS_TOKEN"
+    try:
+        res = requests.get(
+            f"https://graph.facebook.com/v18.0/{ig_user_id}",
+            params={"fields": "username", "access_token": token}, timeout=15,
+        ).json()
+        if "error" in res:
+            msg = res["error"].get("message", str(res))
+            if "expired" in msg.lower() or "session" in msg.lower():
+                msg += " -> El token de Meta caduca cada ~60 dias. Renuevalo en developers.facebook.com."
+            return False, msg
+        return True, f"Cuenta @{res.get('username', ig_user_id)} accesible."
+    except Exception as e:
+        return False, str(e)
+
+
+def check_x_credentials(config: Dict) -> Tuple[bool, str]:
+    claves = ("X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_TOKEN_SECRET")
+    faltantes = [k for k in claves if not config.get(k)]
+    if faltantes:
+        return False, f"Faltan: {', '.join(faltantes)}"
+    try:
+        import tweepy
+        client = tweepy.Client(
+            consumer_key=config["X_API_KEY"], consumer_secret=config["X_API_SECRET"],
+            access_token=config["X_ACCESS_TOKEN"], access_token_secret=config["X_ACCESS_TOKEN_SECRET"],
+        )
+        me = client.get_me()
+        return True, f"Autenticado como @{me.data.username}."
+    except Exception as e:
+        raw = str(e)
+        if "401" in raw:
+            raw += " -> Tokens invalidos o regenerados. Recrealos en developer.x.com (permiso Read and write)."
+        return False, raw
+
+
+def check_reddit_credentials(config: Dict) -> Tuple[bool, str]:
+    claves = ("REDDIT_CLIENT_ID", "REDDIT_CLIENT_SECRET", "REDDIT_USERNAME", "REDDIT_PASSWORD")
+    faltantes = [k for k in claves if not (config.get(k) or "").strip()]
+    if faltantes:
+        return False, (f"Faltan: {', '.join(faltantes)}. "
+                       "Crea una app tipo 'script' en reddit.com/prefs/apps")
+    try:
+        import praw
+        username = config["REDDIT_USERNAME"].strip().lstrip("/")
+        if username.lower().startswith("u/"):
+            username = username[2:]
+        reddit = praw.Reddit(
+            client_id=config["REDDIT_CLIENT_ID"].strip(),
+            client_secret=config["REDDIT_CLIENT_SECRET"].strip(),
+            username=username,
+            password=config["REDDIT_PASSWORD"].strip(),
+            user_agent=f"python:tiktok-crossposter:2.7 (by /u/{username})",
+        )
+        me = reddit.user.me()
+        destino = (config.get("REDDIT_SUBREDDIT") or "").strip() or f"u_{username}"
+        return True, f"Autenticado como u/{me}. Publicara en r/{destino}."
+    except Exception as e:
+        raw = str(e)
+        hint = _reddit_error_hint(raw)
+        return False, f"{raw}" + (f" -> {hint}" if hint else "")
+
+
+def check_all_credentials(config: Optional[Dict] = None) -> Dict[str, Tuple[bool, str]]:
+    """Valida en vivo las credenciales de todas las redes sin publicar nada."""
+    if config is None:
+        config = get_config()
+    return {
+        "youtube": check_youtube_credentials(config),
+        "instagram": check_instagram_credentials(config),
+        "x": check_x_credentials(config),
+        "reddit": check_reddit_credentials(config),
+    }
+
 
 # ==============================================================================
 # ORQUESTADOR PRINCIPAL
@@ -799,7 +1201,7 @@ def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
 
     # 2. Reintentar redes que quedaron pendientes en algun video ya procesado
     #    (ej: publicacion parcial por un token vencido que ya fue renovado)
-    incomplete = find_incomplete_video()
+    incomplete = find_incomplete_video(config)
     if incomplete:
         video_info, missing_platforms = incomplete
         print(f"[WORKFLOW] Video {video_info['id']} tiene redes pendientes: {', '.join(missing_platforms)}. Reintentando...")

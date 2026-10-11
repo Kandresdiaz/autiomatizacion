@@ -46,6 +46,9 @@ Para que el robot publique correctamente en tus redes sociales, debes configurar
 | `REDDIT_CLIENT_SECRET` | Reddit | Client Secret de app de Reddit |
 | `REDDIT_USERNAME` | Reddit | Usuario de tu cuenta de Reddit |
 | `REDDIT_PASSWORD` | Reddit | Contraseña de tu cuenta de Reddit |
+| `REDDIT_SUBREDDIT` | Reddit (Opcional) | Subreddit destino sin `r/`. Si lo dejas vacío publica en tu propio perfil (`u_tuusuario`), que siempre acepta video |
+| `REDDIT_FLAIR_ID` | Reddit (Opcional) | ID de flair, obligatorio en subreddits que exigen flair |
+| `REDDIT_FLAIR_TEXT` | Reddit (Opcional) | Texto del flair cuando el subreddit lo permite libre |
 | `GEMINI_API_KEY` | IA (Opcional) | **Recomendada (Gratis)**. Clave de Google AI Studio (`aistudio.google.com`) para análisis y guiones con microganchos |
 | `GROQ_API_KEY` | IA (Opcional) | Alternativa gratis para usar modelos Llama 3 en el asistente de guiones |
 | `OPENAI_API_KEY` | IA (Opcional) | Alternativa si prefieres usar modelos GPT-4o-mini de OpenAI |
@@ -84,6 +87,7 @@ Existen 2 entornos independientes donde debes configurar tus llaves según cómo
 - **🔗 Publicar por Enlace Directo:** Sección desplegable para pegar cualquier enlace directo de TikTok y publicarlo de inmediato a todos los canales activos sin depender del escaneo periódico del perfil.
 - Vista previa embebida del último video de TikTok con reproductor sin marcas de agua.
 - Toggles para activar/desactivar plataformas individuales (YouTube, IG, X, Reddit).
+- **🔬 Probar credenciales ahora:** valida en vivo YouTube, Instagram, X y Reddit *sin publicar nada*, y muestra el error exacto más la solución concreta cuando una llave ha caducado o ha sido revocada.
 
 ### 📅 Pestaña 2: Programador de Historial
 - Recupera hasta 50 videos del perfil de TikTok mostrando miniatura (cover), título, ID, fecha de publicación y estado.
@@ -107,14 +111,46 @@ Existen 2 entornos independientes donde debes configurar tus llaves según cómo
 
 | Red Social | Estado | Recomendación | Notas Técnicas |
 | :--- | :--- | :--- | :--- |
-| **YouTube Shorts** | ✅ **Operacional** | **Imprescindible** | Flujo OAuth 2.0 con scope `youtube.upload`. Los videos se publican como Shorts públicos con SEO optimizado (Comprobado y verificado en vivo). |
+| **YouTube Shorts** | ✅ **Operacional** | **Imprescindible** | Flujo OAuth 2.0 con scope `youtube.upload`, subida resumible por chunks con reintentos. El refresh token se canjea *antes* de subir, así un fallo de credenciales se reporta al instante y con la solución concreta. Cada subida gasta ~1600 de las 10.000 unidades diarias de cuota (~6 videos/día). |
 | **Instagram Reels** | ✅ **Operacional** | **Imprescindible** | Meta Graph API profesional. Requiere Long-Lived Token (60 días). Carga directa del video MP4 en CDN de TikWM sin marcas de agua. |
 | **X (Twitter)** | ⚠️ **Restringido por API** | Opcional / Desactivar | La API gratuita (Free Tier) de X solo permite texto. La subida de video (`media_upload`) suele requerir el plan Basic ($100/mes) o rechaza con 401/402. |
-| **Reddit** | ⚠️ **Desactivar** | No recomendado | Se omite automáticamente si las credenciales están vacías sin interrumpir el resto de redes. |
+| **Reddit** | ✅ **Operacional** | Recomendado | Sube el **video nativo** a Reddit (mucho más alcance que un enlace). Si el subreddit no acepta video, cae automáticamente a post de enlace y, en última instancia, a post de texto. Se omite sin interrumpir el resto de redes si faltan credenciales. |
 
 ---
 
 ## 🔄 Renovación de Credenciales
+
+### YouTube / Google OAuth
+
+Errores típicos y qué significan exactamente:
+
+| Error de Google | Causa real | Solución |
+| :--- | :--- | :--- |
+| `deleted_client` | El cliente OAuth fue **borrado** de Google Cloud Console | Crear credenciales nuevas y regenerar el refresh token |
+| `invalid_client` | `YOUTUBE_CLIENT_ID` / `SECRET` no coinciden con ningún cliente | Copiarlos de nuevo desde Credenciales |
+| `unauthorized_client` | El cliente no es de tipo *Aplicación de escritorio* | Recrear el cliente como **Desktop app** |
+| `invalid_grant` | Refresh token revocado, caducado (app en modo *Testing* caduca a los 7 días) o generado con otro `client_id` | Regenerar el refresh token y **publicar** la app OAuth |
+| `quotaExceeded` | Se agotaron las 10.000 unidades diarias de la API | Esperar el reset o solicitar más cuota |
+
+Para regenerar las credenciales:
+
+1. En [Google Cloud Console](https://console.cloud.google.com): **APIs y servicios ➔ Biblioteca ➔** activar **YouTube Data API v3**.
+2. **Pantalla de consentimiento OAuth:** pulsar **Publicar app** (si queda en *Testing*, el refresh token caduca a los 7 días).
+3. **Credenciales ➔ Crear credenciales ➔ ID de cliente de OAuth ➔ Aplicación de escritorio.**
+4. En la terminal del proyecto:
+   ```bash
+   python generate_youtube_token.py
+   ```
+   El script abre el navegador, autorizas con la cuenta **dueña del canal**, verifica el token contra la API y lo guarda en `.env`.
+5. Copiar `YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET` y `YOUTUBE_REFRESH_TOKEN` también a **GitHub Secrets**.
+
+### Reddit
+
+1. Ir a [reddit.com/prefs/apps](https://www.reddit.com/prefs/apps) ➔ **create another app...**
+2. Tipo: **script** (obligatorio; cualquier otro tipo devuelve `403`). Redirect URI: `http://localhost:8080`.
+3. Copiar el ID que aparece bajo el nombre de la app (`REDDIT_CLIENT_ID`) y el *secret* (`REDDIT_CLIENT_SECRET`).
+4. `REDDIT_USERNAME` va **sin** `u/`. Si la cuenta tiene 2FA, `REDDIT_PASSWORD` debe ser `tupassword:123456` (con el código TOTP del momento) — lo práctico es desactivar 2FA en la cuenta del bot.
+5. La app debe estar creada por **el mismo usuario** de `REDDIT_USERNAME`.
 
 ### Meta Graph API (Instagram 60 días)
 1. Generar User Token con `instagram_basic`, `instagram_content_publish`, `pages_show_list` en Graph API Explorer.

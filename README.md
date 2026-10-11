@@ -66,6 +66,9 @@ tiktok-crossposter/
 | `REDDIT_CLIENT_SECRET` | Client Secret de Reddit App |
 | `REDDIT_USERNAME` | Tu usuario de Reddit |
 | `REDDIT_PASSWORD` | Tu contraseña de Reddit |
+| `REDDIT_SUBREDDIT` | *(Opcional)* Subreddit destino sin `r/`. Vacío = publica en tu perfil `u_tuusuario` |
+| `REDDIT_FLAIR_ID` | *(Opcional)* ID de flair, si el subreddit lo exige |
+| `REDDIT_FLAIR_TEXT` | *(Opcional)* Texto del flair |
 
 ¡Listo! El servidor de GitHub revisará automáticamente tu TikTok cada 2 horas y resubirá tus nuevos videos sin costo.
 

@@ -2,6 +2,25 @@
 
 Todos los cambios notables realizados en este proyecto se registrarán en este archivo.
 
+## [2.7.0] - 2026-10-11
+### 🐛 Corregido
+- **Reintento atascado que dejaba videos fuera de YouTube (causa raíz en producción):** `find_incomplete_video()` devolvía el primer video con cualquier red pendiente. Como al video `7689625193223949569` solo le faltaban X (401 permanente en el plan gratuito) y Reddit (sin credenciales), **cada corrida de GitHub Actions gastaba el reintento en ese mismo video**, y los 4 videos a los que de verdad les faltaba YouTube (`7691351448658988340`, `7692165172504431924`, `7692180380907998516`, `7692197163060743425`, publicados entre el 30-sep y el 2-oct con las credenciales viejas) nunca se volvieron a intentar. Ahora solo cuentan como pendientes las redes cuyas credenciales son válidas **en ese momento**, así el reintento va directo a los huecos que sí se pueden llenar.
+- **Diagnóstico real del fallo de YouTube:** La subida fallaba porque el cliente OAuth de Google Cloud había sido **eliminado** (`deleted_client`), por lo que ni el refresh token ni ningún token nuevo podían canjearse. `publish_to_youtube` ahora canjea el refresh token **antes** de subir el MP4 y traduce `deleted_client`, `invalid_client`, `unauthorized_client`, `invalid_grant`, `quotaExceeded`, `uploadLimitExceeded` y `accessNotConfigured` a una instrucción concreta de qué hacer, en vez de devolver el error crudo de Google.
+- **Pérdida de credenciales al cambiar el usuario de TikTok:** En `app.py`, guardar un usuario nuevo abría `.env` en modo `"w"` y escribía una sola línea, **borrando todos los tokens** de YouTube, Meta, X y Reddit. Ahora `update_env_key()` reescribe únicamente esa clave y conserva el resto del archivo.
+- **Subida de YouTube resiliente:** Carga resumible en chunks de 4 MB con reintentos y backoff exponencial ante errores transitorios (500/502/503/504, cortes de conexión) y reporte de progreso.
+
+### ✨ Añadido
+- **`generate_youtube_token.py`:** Generador asistido de `YOUTUBE_REFRESH_TOKEN`. Acepta `client_secret.json` o Client ID/Secret pegados a mano, fuerza `access_type=offline` + `prompt=consent`, verifica el token contra la YouTube Data API y lo guarda en `.env` sin tocar las demás llaves.
+- **Reddit con video nativo:** `publish_to_reddit` ahora sube el MP4 directamente a Reddit (mucho más alcance que un enlace), con miniatura extraída del propio video si hay `ffmpeg` disponible. Cadena de respaldo automática: video nativo ➔ post de enlace ➔ post de texto. Compatible con `praw` 7.x (`submit_video`) y 8.x (`submit(video=PostMedia(...))`).
+- **Autenticación de Reddit verificada antes de subir** y traducción de sus errores típicos (`401`, `403` por app que no es de tipo *script*, `SUBREDDIT_NOTALLOWED`, flair obligatorio, `RATELIMIT`).
+- **Variables opcionales de Reddit:** `REDDIT_FLAIR_ID` y `REDDIT_FLAIR_TEXT` para subreddits que exigen flair, añadidas también al workflow de GitHub Actions.
+- **Diagnóstico de credenciales en vivo:** `check_all_credentials()` (y los `check_*_credentials()` por red) validan YouTube, Instagram, X y Reddit **sin publicar nada**, expuesto en el dashboard con el botón **🔬 Probar credenciales ahora**.
+
+### 🛠️ Modificado
+- `DOCUMENTATION.md`: Tabla de errores de Google OAuth, guía paso a paso para regenerar el token de YouTube, guía de creación de la app de Reddit (tipo *script*, 2FA, usuario sin `u/`) y estado de Reddit actualizado a **Operacional**.
+
+---
+
 ## [2.6.0] - 2026-09-17
 ### 🐛 Corregido
 - **Protección contra Re-publicación de Histórico Antiguo:** Limitada la detección automática en `run_crosspost_workflow` exclusivamente a los 3 videos más recientes del perfil de TikTok. Se evita que el scraper excave en el backlog histórico de videos viejos que el creador ya había publicado manualmente en Instagram u otras redes.

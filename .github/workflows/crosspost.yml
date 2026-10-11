@@ -44,6 +44,8 @@ jobs:
           REDDIT_USERNAME: ${{ secrets.REDDIT_USERNAME }}
           REDDIT_PASSWORD: ${{ secrets.REDDIT_PASSWORD }}
           REDDIT_SUBREDDIT: ${{ secrets.REDDIT_SUBREDDIT }}
+          REDDIT_FLAIR_ID: ${{ secrets.REDDIT_FLAIR_ID }}
+          REDDIT_FLAIR_TEXT: ${{ secrets.REDDIT_FLAIR_TEXT }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: |
           python tiktok_crossposter.py

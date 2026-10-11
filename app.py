@@ -21,7 +21,8 @@ from tiktok_crossposter import (
     add_to_pending_queue,
     remove_from_pending_queue,
     get_config,
-    get_preview_play_url
+    get_preview_play_url,
+    check_all_credentials
 )
 from ai_assistant import (
     detect_ai_provider,
@@ -150,6 +151,31 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Helper para cargar/guardar configuración de plataformas activas
+def update_env_key(key: str, value: str):
+    """Actualiza una sola clave del .env conservando el resto del archivo.
+
+    Antes esto se hacia con open(".env", "w") + un unico write, lo que borraba
+    TODAS las credenciales guardadas (tokens de YouTube, Meta, X y Reddit).
+    """
+    lineas = []
+    if os.path.exists(".env"):
+        with open(".env", "r", encoding="utf-8") as f:
+            lineas = f.read().splitlines()
+
+    reemplazado = False
+    for i, linea in enumerate(lineas):
+        if "=" in linea and not linea.strip().startswith("#"):
+            if linea.split("=", 1)[0].strip() == key:
+                lineas[i] = f"{key}={value}"
+                reemplazado = True
+                break
+    if not reemplazado:
+        lineas.append(f"{key}={value}")
+
+    with open(".env", "w", encoding="utf-8") as f:
+        f.write("\n".join(lineas) + "\n")
+
+
 def load_active() -> dict:
     path = "active_platforms.json"
     if os.path.exists(path):
@@ -294,13 +320,28 @@ with tab1:
         st.markdown(f"**YouTube:** {'✅ Token detectado' if cfg.get('YOUTUBE_REFRESH_TOKEN') else '❌ Falta YOUTUBE_REFRESH_TOKEN'}")
         st.markdown(f"**X (Twitter):** {'✅ Tokens detectados' if (cfg.get('X_ACCESS_TOKEN') and cfg.get('X_ACCESS_TOKEN_SECRET')) else '❌ Falta X_ACCESS_TOKEN o Secret'}")
         st.markdown(f"**Reddit:** {'✅ Credenciales detectadas' if cfg.get('REDDIT_CLIENT_ID') else '❌ Faltan credenciales Reddit'}")
+
+        st.caption("Tener la llave guardada no significa que siga siendo valida. Compruebalo en vivo:")
+        if st.button("🔬 Probar credenciales ahora", key="t1_check_creds", use_container_width=True):
+            with st.spinner("Consultando cada API (no publica nada)..."):
+                st.session_state["cred_check"] = check_all_credentials(cfg)
+
+        if st.session_state.get("cred_check"):
+            NOMBRES_RED = {"youtube": "YouTube", "instagram": "Instagram", "x": "X (Twitter)", "reddit": "Reddit"}
+            for red, (ok, detalle) in st.session_state["cred_check"].items():
+                if ok:
+                    st.success(f"**{NOMBRES_RED[red]}:** {detalle}")
+                else:
+                    st.error(f"**{NOMBRES_RED[red]}:** {detalle}")
+            if not st.session_state["cred_check"].get("youtube", (True, ""))[0]:
+                st.info("Para regenerar el token de YouTube, ejecuta en la terminal: "
+                        "`python generate_youtube_token.py`")
         
         st.divider()
         st.markdown('<div class="section-title">Ajustes Rápidos</div>', unsafe_allow_html=True)
         new_user = st.text_input("Usuario de TikTok:", value=tiktok_user, key="t1_user")
         if new_user != tiktok_user:
-            with open(".env", "w", encoding="utf-8") as f:
-                f.write(f"TIKTOK_USERNAME={new_user}\n")
+            update_env_key("TIKTOK_USERNAME", new_user)
             st.toast("Usuario de TikTok actualizado.", icon="👤")
         st.markdown('</div>', unsafe_allow_html=True)
 
