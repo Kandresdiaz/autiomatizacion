@@ -1147,7 +1147,16 @@ def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None, only
         results["reddit"] = publish_to_reddit(temp_video_file, captions["reddit"], config, video_url=video_info.get("webpage_url", "")) if active.get("reddit", True) and _should_attempt("reddit") else ((True, "Ya publicado previamente (omitido)") if active.get("reddit", True) else (False, "Desactivado en canales"))
 
         # 4. Registrar estado por red y guardar como procesado si al menos 1 tuvo éxito
-        update_platform_status(video_info, results)
+        #    Solo se registran las redes que de verdad se intentaron en esta corrida:
+        #    en un reintento parcial las demas llevan el marcador "Ya publicado
+        #    previamente", y guardarlo tal cual marcaba como publicadas redes que
+        #    nunca lo estuvieron (ej: Reddit sin credenciales quedaba en true y
+        #    el video ya no se volvia a intentar nunca).
+        intentadas = {
+            net: res for net, res in results.items()
+            if only_platforms is None or net in only_platforms or not res[0]
+        }
+        update_platform_status(video_info, intentadas)
         success_count = sum(1 for (ok, _) in results.values() if ok)
         if success_count > 0:
             save_processed_id(video_id)
