@@ -362,6 +362,60 @@ def fetch_latest_tiktok_videos(username: str, count: int = 10) -> List[Dict]:
 # DESCARGA SIN MARCA DE AGUA (100% via TikWM API - verificado que funciona)
 # ==============================================================================
 
+# TikWM bloquea por rachas las IPs de los runners de GitHub: devuelve 403 a
+# todos los intentos de una misma corrida y responde con normalidad minutos
+# despues. Por eso se rota endpoint/metodo/User-Agent y, sobre todo, se
+# separan los intentos lo suficiente para salir de la racha de bloqueo.
+TIKWM_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
+    "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Mobile Safari/537.36",
+]
+TIKWM_RUTAS = [
+    ("post", "https://www.tikwm.com/api/"),
+    ("get", "https://www.tikwm.com/api/"),
+    ("post", "https://tikwm.com/api/"),
+    ("get", "https://tikwm.com/api/"),
+]
+# Esperas crecientes entre intentos. El total (~3 min) cabe de sobra en el
+# ciclo de 30 min del workflow y es lo que permite atravesar el bloqueo.
+TIKWM_ESPERAS = [8, 20, 35, 50, 65]
+
+
+def _tikwm_pedir(webpage_url: str, metodo: str, endpoint: str, user_agent: str) -> Tuple[Optional[Dict], str]:
+    """Una sola consulta a TikWM. Devuelve (data, "") o (None, motivo_del_fallo)."""
+    headers = {
+        "User-Agent": user_agent,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "es-ES,es;q=0.9,en;q=0.8",
+        "Referer": "https://www.tikwm.com/",
+    }
+    payload = {"url": webpage_url, "hd": "1"}
+    try:
+        if metodo == "post":
+            resp = requests.post(endpoint, data=payload, headers=headers, timeout=20)
+        else:
+            resp = requests.get(endpoint, params=payload, headers=headers, timeout=20)
+    except Exception as e:
+        return None, f"sin respuesta ({type(e).__name__}: {e})"
+
+    if resp.status_code != 200:
+        return None, f"HTTP {resp.status_code} (bloqueo de IP del runner)"
+
+    try:
+        body = resp.json()
+    except ValueError:
+        return None, f"respuesta no-JSON ({resp.text[:60].strip()!r})"
+
+    if body.get("code") != 0:
+        return None, str(body.get("msg", body))
+
+    data = body.get("data") or {}
+    if not data.get("play"):
+        return None, "respuesta sin URL de descarga"
+    return data, ""
+
+
 def download_video_via_tikwm(video_info: Dict) -> Tuple[str, str]:
     """
     Descarga el video sin marca de agua usando TikWM API.
@@ -370,38 +424,27 @@ def download_video_via_tikwm(video_info: Dict) -> Tuple[str, str]:
     webpage_url = video_info.get("webpage_url", "")
     print(f"[TIKWM] Obteniendo .mp4 sin watermark para: {webpage_url}")
 
-    # TikWM a veces responde vacio/HTML a los runners de GitHub: reintentar con espera
-    res = None
+    total = len(TIKWM_ESPERAS) + 1
+    data = None
     last_err = ""
-    for attempt in range(1, 5):
-        resp = None
-        try:
-            resp = requests.post(
-                "https://www.tikwm.com/api/",
-                data={"url": webpage_url, "hd": "1"},
-                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"},
-                timeout=20
-            )
-            res = resp.json()
-            if res.get("code") == 0:
-                break
-            last_err = res.get("msg", "unknown")
-        except Exception as e:
-            last_err = f"HTTP {resp.status_code}: {e}" if resp is not None else str(e)
-        res = None
-        print(f"[TIKWM] Intento {attempt}/4 fallido ({last_err}).")
-        if attempt < 4:
-            time.sleep(5 * attempt)
+    for intento in range(total):
+        metodo, endpoint = TIKWM_RUTAS[intento % len(TIKWM_RUTAS)]
+        user_agent = TIKWM_USER_AGENTS[intento % len(TIKWM_USER_AGENTS)]
+        data, last_err = _tikwm_pedir(webpage_url, metodo, endpoint, user_agent)
+        if data:
+            break
+        host = endpoint.split("//")[1].split("/")[0]
+        print(f"[TIKWM] Intento {intento + 1}/{total} fallido ({metodo.upper()} {host}): {last_err}")
+        if intento < len(TIKWM_ESPERAS):
+            espera = TIKWM_ESPERAS[intento]
+            print(f"[TIKWM] Esperando {espera}s para salir de la racha de bloqueo...")
+            time.sleep(espera)
 
-    if res is None:
-        print(f"[TIKWM] No disponible ({last_err}). Usando yt-dlp como respaldo.")
+    if not data:
+        print(f"[TIKWM] No disponible tras {total} intentos ({last_err}). Usando yt-dlp como respaldo.")
         return download_video_via_ytdlp(video_info)
 
-    data = res.get("data", {})
     direct_url = data.get("play", "")
-    if not direct_url:
-        raise RuntimeError("TikWM no retorno URL de descarga valida.")
-
     if not direct_url.startswith("http"):
         direct_url = f"https://www.tikwm.com{direct_url}"
 
@@ -409,50 +452,75 @@ def download_video_via_tikwm(video_info: Dict) -> Tuple[str, str]:
     if data.get("title") and not video_info.get("title", "").strip():
         video_info["title"] = data["title"]
 
-    print(f"[TIKWM SUCCESS] URL de descarga obtenida.")
+    print("[TIKWM SUCCESS] URL de descarga obtenida.")
 
     # Descargar a archivo temporal
     temp_dir = tempfile.mkdtemp()
     output_path = os.path.join(temp_dir, "video.mp4")
 
     r = requests.get(direct_url, stream=True, timeout=60,
-                     headers={"User-Agent": "Mozilla/5.0"})
+                     headers={"User-Agent": TIKWM_USER_AGENTS[0]})
     r.raise_for_status()
 
-    total = 0
+    descargado = 0
     with open(output_path, "wb") as f:
         for chunk in r.iter_content(chunk_size=65536):
             f.write(chunk)
-            total += len(chunk)
+            descargado += len(chunk)
 
-    if total < 10000:
-        raise RuntimeError(f"Archivo descargado demasiado pequeno ({total} bytes).")
+    if descargado < 10000:
+        raise RuntimeError(f"Archivo descargado demasiado pequeno ({descargado} bytes).")
 
-    print(f"[DOWNLOAD SUCCESS] Video descargado: {output_path} ({total // 1024} KB)")
+    print(f"[DOWNLOAD SUCCESS] Video descargado: {output_path} ({descargado // 1024} KB)")
     return output_path, direct_url
 
 def download_video_via_ytdlp(video_info: Dict) -> Tuple[str, str]:
     """
     Respaldo cuando TikWM no responde: descarga con yt-dlp.
     No hay URL publica del mp4, asi que Instagram (que la necesita) no podra publicar.
+
+    Se intenta primero la API de la app de TikTok y solo despues la web. Por
+    defecto yt-dlp NO usa la API de la app (solo la activa si se le pasa
+    app_info), y la ruta web es justo la que TikTok responde con un reto
+    anti-bot desde las IPs de GitHub Actions, fallando con
+    "Unexpected response from webpage request".
     """
     webpage_url = video_info.get("webpage_url", "")
-    temp_dir = tempfile.mkdtemp()
-    output_path = os.path.join(temp_dir, "video.mp4")
-    ydl_opts = {
-        'outtmpl': output_path,
+    base_opts = {
         'format': 'best[ext=mp4]/best',
         'quiet': True,
         'no_warnings': True,
+        'noprogress': True,
+        'http_headers': {
+            'User-Agent': TIKWM_USER_AGENTS[0],
+            'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+        },
     }
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-        info = ydl.extract_info(webpage_url, download=True)
-    if info and info.get("title") and not video_info.get("title", "").strip():
-        video_info["title"] = info["title"]
-    if not os.path.exists(output_path) or os.path.getsize(output_path) < 10000:
-        raise RuntimeError("yt-dlp no pudo descargar el video.")
-    print(f"[DOWNLOAD SUCCESS] Video descargado con yt-dlp: {output_path} ({os.path.getsize(output_path) // 1024} KB)")
-    return output_path, ""
+    rutas = [
+        ("API de la app de TikTok", {'extractor_args': {'tiktok': {'app_info': ['']}}}),
+        ("pagina web de TikTok", {}),
+    ]
+
+    errores = []
+    for nombre, extra in rutas:
+        temp_dir = tempfile.mkdtemp()
+        output_path = os.path.join(temp_dir, "video.mp4")
+        try:
+            print(f"[YT-DLP] Intentando por {nombre}...")
+            with yt_dlp.YoutubeDL({**base_opts, 'outtmpl': output_path, **extra}) as ydl:
+                info = ydl.extract_info(webpage_url, download=True)
+            if not os.path.exists(output_path) or os.path.getsize(output_path) < 10000:
+                raise RuntimeError("archivo vacio o demasiado pequeno")
+            if info and info.get("title") and not video_info.get("title", "").strip():
+                video_info["title"] = info["title"]
+            print(f"[DOWNLOAD SUCCESS] Video descargado con yt-dlp via {nombre}: "
+                  f"{output_path} ({os.path.getsize(output_path) // 1024} KB)")
+            return output_path, ""
+        except Exception as e:
+            errores.append(f"{nombre}: {str(e)[:150]}")
+            print(f"[YT-DLP] Fallo por {nombre}: {str(e)[:150]}")
+
+    raise RuntimeError("yt-dlp no pudo descargar el video. " + " | ".join(errores))
 
 def get_preview_play_url(webpage_url: str) -> Optional[str]:
     """Obtiene la URL directa de video MP4 desde TikWM para previsualización en el dashboard."""
