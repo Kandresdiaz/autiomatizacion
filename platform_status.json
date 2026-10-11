@@ -23,10 +23,10 @@
     "title": "así va en bot nueva función toco",
     "webpage_url": "https://www.tiktok.com/@b00kevin/video/7692165172504431924",
     "platforms": {
-      "youtube": false,
+      "youtube": true,
       "instagram": true,
       "x": false,
-      "reddit": false
+      "reddit": true
     }
   },
   "7692180380907998516": {
