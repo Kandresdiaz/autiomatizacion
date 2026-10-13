@@ -2,6 +2,14 @@
 
 Todos los cambios notables realizados en este proyecto se registrarán en este archivo.
 
+## [2.9.2] - 2026-10-13
+### 🐛 Corregido
+- **Todas las funciones de IA caían con `404 model not found`:** La lista de modelos estaba fija en el código (`gemini-2.5-flash`, `gemini-1.5-flash`) y Google retiró el segundo. El 404 además demuestra que la clave autenticaba bien: nunca fue un problema de credenciales. Ahora `listar_modelos_gemini()` le pregunta a la clave qué modelos soportan `generateContent` (en `v1beta` y si no en `v1`), cachea la respuesta y los ordena por preferencia, quedándose con un `flash` si los preferidos no están. Sin catálogo disponible intenta a ciegas como antes.
+- **El mensaje de error ocultaba la causa real:** cada intento pisaba `last_err`, así que solo se veía el fallo del último modelo y el del primero se perdía. Ahora el error junta todos los intentos y añade la lista de modelos que la clave sí tiene.
+- **Respuestas vacías por presupuesto de salida agotado:** `maxOutputTokens` 2048 ➔ 8192 (y `max_tokens` 2048 ➔ 4096 en la ruta compatible con OpenAI). El diagnóstico del asesor son 6 secciones con tablas y el modo ganchos son 10 bloques; los modelos 2.5 además gastan parte del presupuesto razonando y devuelven texto vacío al agotarlo.
+
+---
+
 ## [2.9.1] - 2026-10-13
 ### 🐛 Corregido
 - **Republicación de 3 videos viejos a Instagram y YouTube (`MAX_VIDEO_AGE_DAYS` 14 ➔ 2):** El 13-oct el robot resubió los TikToks del 5-oct 11:44, 5-oct 12:05 y 9-oct 15:46, que ya estaban en esas redes. No era un fallo del registro: el listado de perfil que TikTok devolvía a los runners de GitHub (IPs de EE.UU.) **omitía esos videos**, así que el robot nunca los había visto ni anotado en `processed_videos.json`. Al repararse el listado (ruta `sec_uid`, escaneo de 40, fusión de ambas rutas) aparecieron por primera vez, cayeron dentro de la ventana de 14 días y se publicaron como si fueran nuevos. La ventana arrastraba un riesgo invisible: cada hueco del listado era un video esperando a resucitar el día que el listado mejorara. Con 2 días (el workflow corre cada 2 horas) un video que el robot nunca ha visto y tiene más de 2 días se trata como lo que es, un hueco en el registro, y no se publica.
