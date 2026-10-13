@@ -25,6 +25,8 @@ Todos los cambios notables realizados en este proyecto se registrarán en este a
 
 - **Listado del perfil incompleto segun la region (lo que hacia que tus videos no llegaran a YouTube):** TikTok no devuelve el mismo perfil a todo el mundo. Desde los runners de GitHub (EE.UU.) el listado omitia videos que si se ven desde Colombia, incluido uno subido el mismo 13-oct. Ahora se consultan **ambas** rutas de listado (`tiktokuser:<sec_uid>` y la URL del perfil) y se **unen** los resultados: basta con que una vea el video. El `sec_uid` se cachea en `tiktok_profile.json` y las urls se construyen siempre con el usuario real, porque la ruta por sec_uid devuelve `/@MS4wLjABAAAA.../video/<id>`, que TikWM rechaza.
 
+- **Videos duplicados en YouTube:** cada corrida hacia checkout del commit que la disparo, no del ultimo de `main`. Con el grupo de concurrencia, una corrida que llegaba mientras otra publicaba quedaba en cola y arrancaba segundos despues **con el estado congelado del momento en que se creo**, sin el video que la anterior acababa de registrar, y lo volvia a publicar. Ahora el checkout fija `ref: main` y se refresca con `git reset --hard origin/main` antes de ejecutar.
+
 ### ✨ Añadido
 - Variables opcionales `TIKTOK_SEC_UID` (evita resolverlo en cada corrida) y `MAX_VIDEO_AGE_DAYS` (antiguedad maxima publicable), ambas en el workflow.
 

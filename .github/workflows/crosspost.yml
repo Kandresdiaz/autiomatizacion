@@ -20,6 +20,18 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          # Sin esto, la corrida hace checkout del commit que la disparo. Una
+          # corrida que espero en la cola arrancaria con el estado congelado de
+          # cuando se creo y republicaria lo que la anterior acaba de publicar.
+          ref: main
+          fetch-depth: 0
+
+      - name: Refrescar estado publicado
+        run: |
+          git fetch origin main
+          git reset --hard origin/main
+          echo "Estado en: $(git rev-parse --short HEAD)"
 
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
