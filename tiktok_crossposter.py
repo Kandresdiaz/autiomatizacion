@@ -417,7 +417,7 @@ def _listar_perfil(origen: str, count: int, clean_username: str) -> List[Dict]:
     return videos
 
 
-def fetch_latest_tiktok_videos(username: str, count: int = 20, config: Optional[Dict] = None) -> List[Dict]:
+def fetch_latest_tiktok_videos(username: str, count: int = 40, config: Optional[Dict] = None) -> List[Dict]:
     """
     Obtiene los últimos videos del perfil de TikTok usando yt-dlp.
     Devuelve lista de dicts con id, title, webpage_url, upload_date, timestamp, thumbnail, duration.
@@ -1571,7 +1571,9 @@ def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
     force_run = bool(config.get("FORCE_RUN"))
 
     # 1. Buscar videos recientes en TikTok
-    videos = fetch_latest_tiktok_videos(tiktok_username, count=20, config=config)
+    # El escaneo debe cubrir con holgura la ventana de MAX_VIDEO_AGE_DAYS: si un
+    # video cae fuera del listado, el workflow deja de verlo aunque este pendiente.
+    videos = fetch_latest_tiktok_videos(tiktok_username, count=40, config=config)
 
     if force_run and videos:
         print("[WORKFLOW] Ejecución forzada: procesando último video detectado.")
