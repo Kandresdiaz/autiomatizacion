@@ -291,16 +291,41 @@ Responde SOLO con un JSON valido con esas 4 claves exactas."""
 # ==============================================================================
 
 _SEC_UID_CACHE: Dict[str, str] = {}
+PROFILE_FILE = "tiktok_profile.json"
+
+
+def _load_profile_cache() -> Dict[str, str]:
+    if os.path.exists(PROFILE_FILE):
+        try:
+            with open(PROFILE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data.get("sec_uid", {}) if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _save_profile_cache(username: str, sec_uid: str):
+    cache = _load_profile_cache()
+    if cache.get(username) == sec_uid:
+        return
+    cache[username] = sec_uid
+    try:
+        with open(PROFILE_FILE, "w", encoding="utf-8") as f:
+            json.dump({"sec_uid": cache}, f, indent=2)
+    except Exception:
+        pass
 
 
 def resolve_tiktok_sec_uid(username: str, config: Optional[Dict] = None) -> Optional[str]:
     """
     Obtiene el identificador interno del perfil (sec_uid) que necesita la ruta
-    `tiktokuser:` de yt-dlp.
+    `tiktokuser:` de yt-dlp, que es la unica que devuelve el perfil COMPLETO.
 
-    Se saca de cualquier video ya conocido del creador, porque pedirselo a la
-    pagina del perfil es justo lo que falla ("Unable to extract secondary user
-    ID") cuando TikTok sirve el reto anti-bot.
+    No se le pregunta a la pagina del perfil: eso es justo lo que falla con
+    "Unable to extract secondary user ID" cuando TikTok sirve el reto anti-bot.
+    Se busca, en orden: la variable TIKTOK_SEC_UID, el cache en disco, y por
+    ultimo cualquier video ya conocido del creador (y se guarda en el cache).
     """
     clean = username.strip().replace("@", "")
     if clean in _SEC_UID_CACHE:
@@ -313,8 +338,14 @@ def resolve_tiktok_sec_uid(username: str, config: Optional[Dict] = None) -> Opti
         _SEC_UID_CACHE[clean] = desde_config
         return desde_config
 
+    en_disco = _load_profile_cache().get(clean)
+    if en_disco:
+        _SEC_UID_CACHE[clean] = en_disco
+        return en_disco
+
     # Cualquier video ya procesado sirve de ancla.
     conocidos = load_processed_ids()
+    errores = []
     for video_id in reversed(conocidos[-5:]):
         url = f"https://www.tiktok.com/@{clean}/video/{video_id}"
         try:
@@ -328,9 +359,15 @@ def resolve_tiktok_sec_uid(username: str, config: Optional[Dict] = None) -> Opti
             if sec_uid:
                 print(f"[SEARCH] sec_uid del perfil resuelto desde el video {video_id}.")
                 _SEC_UID_CACHE[clean] = sec_uid
+                _save_profile_cache(clean, sec_uid)
                 return sec_uid
-        except Exception:
-            continue
+            errores.append(f"{video_id}: sin channel_id")
+        except Exception as e:
+            errores.append(f"{video_id}: {str(e)[:70]}")
+
+    if errores:
+        print(f"[SEARCH] No se pudo resolver el sec_uid del perfil ({' | '.join(errores[:2])}). "
+              "Define TIKTOK_SEC_UID para evitar esta busqueda.")
     return None
 
 
