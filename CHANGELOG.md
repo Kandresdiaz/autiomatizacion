@@ -2,6 +2,17 @@
 
 Todos los cambios notables realizados en este proyecto se registrarán en este archivo.
 
+## [2.9.0] - 2026-10-13
+### ✨ Añadido
+- **Modo ganchos (`generate_hooks()`):** Nueva salida minimalista pensada para quien no graba el guion al pie de la letra. Un campo, un botón y **10 aperturas para los primeros 3 segundos**, cada una con su frase exacta, su visual y su ángulo. `HOOKS_SYSTEM_PROMPT` limita a 12 palabras por frase, prohíbe saludos, presentaciones y tono publicitario, y obliga a un ángulo distinto por gancho.
+- **`build_account_context()`:** Convierte las métricas del análisis en contexto para la IA (vistas promedio, engagement, duración con más vistas, ausencia de comentarios y los títulos actuales con la instrucción de no repetir ese tono). Antes el generador escribía a ciegas aunque el análisis ya supiera que la cuenta topa en 182 vistas con 0 comentarios.
+
+### 🛠️ Modificado
+- **Sub-pestaña `✍️ Generador de Guiones` ➔ `🎣 Ganchos & Guiones`:** El modo ganchos pasa al frente con una sola entrada de texto; el guion completo queda dentro de un desplegable. Se eliminó el selector de origen de 3 opciones: el campo se autocompleta cuando se manda un video desde el Panel Principal, el Historial o el análisis.
+- **`generate_video_script()` acepta `account_context`:** El guion completo también se calibra con los números reales de la cuenta.
+
+---
+
 ## [2.8.0] - 2026-10-13
 ### ✨ Añadido
 - **Asesor Viral con IA (análisis de rendimiento real):** Nueva sub-pestaña `🔎 Análisis de Rendimiento` dentro de la pestaña de IA. Lee de TikTok las métricas reales de los últimos 3 a 15 videos (vistas, likes, comentarios, compartidos, duración y hora de publicación) y entrega un diagnóstico accionable: si el problema es de **alcance** o de **conversión**, qué tienen en común los videos que sí funcionaron, qué está costando vistas, 5 acciones para el próximo video, 3 ideas con el gancho textual del segundo 0 y las metas numéricas a superar en 7 días. Descargable en Markdown.
