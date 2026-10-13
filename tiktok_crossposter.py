@@ -408,7 +408,9 @@ def _listar_perfil(origen: str, count: int, clean_username: str) -> List[Dict]:
         videos.append({
             "id": video_id,
             "title": e.get('title') or e.get('description') or "",
-            "webpage_url": e.get('url') or f"https://www.tiktok.com/@{clean_username}/video/{video_id}",
+            # Siempre con el usuario real: la ruta por sec_uid devuelve urls del
+            # tipo /@MS4wLjABAAAA.../video/<id>, que TikWM no acepta.
+            "webpage_url": f"https://www.tiktok.com/@{clean_username}/video/{video_id}",
             "timestamp": ts or 0,
             "upload_date": upload_date_str,
             "thumbnail": thumbnail_url,
