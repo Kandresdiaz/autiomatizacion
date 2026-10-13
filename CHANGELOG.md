@@ -2,6 +2,14 @@
 
 Todos los cambios notables realizados en este proyecto se registrarán en este archivo.
 
+## [2.9.2] - 2026-10-13
+### 🐛 Corregido
+- **Todas las funciones de IA caían con `404 model not found`:** La lista de modelos estaba fija en el código (`gemini-2.5-flash`, `gemini-1.5-flash`) y Google retiró el segundo. El 404 además demuestra que la clave autenticaba bien: nunca fue un problema de credenciales. Ahora `listar_modelos_gemini()` le pregunta a la clave qué modelos soportan `generateContent` (en `v1beta` y si no en `v1`), cachea la respuesta y los ordena por preferencia, quedándose con un `flash` si los preferidos no están. Sin catálogo disponible intenta a ciegas como antes.
+- **El mensaje de error ocultaba la causa real:** cada intento pisaba `last_err`, así que solo se veía el fallo del último modelo y el del primero se perdía. Ahora el error junta todos los intentos y añade la lista de modelos que la clave sí tiene.
+- **Respuestas vacías por presupuesto de salida agotado:** `maxOutputTokens` 2048 ➔ 8192 (y `max_tokens` 2048 ➔ 4096 en la ruta compatible con OpenAI). El diagnóstico del asesor son 6 secciones con tablas y el modo ganchos son 10 bloques; los modelos 2.5 además gastan parte del presupuesto razonando y devuelven texto vacío al agotarlo.
+
+---
+
 ## [2.9.0] - 2026-10-13
 ### ✨ Añadido
 - **Modo ganchos (`generate_hooks()`):** Nueva salida minimalista pensada para quien no graba el guion al pie de la letra. Un campo, un botón y **10 aperturas para los primeros 3 segundos**, cada una con su frase exacta, su visual y su ángulo. `HOOKS_SYSTEM_PROMPT` limita a 12 palabras por frase, prohíbe saludos, presentaciones y tono publicitario, y obliga a un ángulo distinto por gancho.
