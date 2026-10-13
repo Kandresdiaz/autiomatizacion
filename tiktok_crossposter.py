@@ -440,7 +440,11 @@ def fetch_latest_tiktok_videos(username: str, count: int = 40, config: Optional[
         intentos.append(("sec_uid del perfil", f"tiktokuser:{sec_uid}"))
     intentos.append(("url del perfil", f"https://www.tiktok.com/@{clean_username}"))
 
-    mejor: List[Dict] = []
+    # Se consultan AMBAS rutas y se unen los resultados. TikTok no devuelve el
+    # mismo perfil a todo el mundo: desde los runners de GitHub (EE.UU.) el
+    # listado omitia videos que si se ven desde otras regiones, y por eso 2
+    # videos se quedaron sin publicar. Basta con que una ruta vea el video.
+    union: Dict[str, Dict] = {}
     for nombre, origen in intentos:
         try:
             videos = _listar_perfil(origen, count, clean_username)
@@ -452,16 +456,19 @@ def fetch_latest_tiktok_videos(username: str, count: int = 40, config: Optional[
             continue
 
         con_fecha = sum(1 for v in videos if v["timestamp"])
-        print(f"[SEARCH] Ruta '{nombre}': {len(videos)} videos ({con_fecha} con fecha).")
-        if len(videos) > len(mejor) or con_fecha > sum(1 for v in mejor if v["timestamp"]):
-            mejor = videos
-        # Un listado completo y fechado es todo lo que hace falta.
-        if con_fecha == len(videos):
-            break
+        nuevos = [v for v in videos if v["id"] not in union]
+        print(f"[SEARCH] Ruta '{nombre}': {len(videos)} videos ({con_fecha} con fecha, "
+              f"{len(nuevos)} que la otra ruta no traia).")
+        for v in videos:
+            previo = union.get(v["id"])
+            # Ante duplicados gana la entrada que si trae fecha.
+            if previo is None or (not previo["timestamp"] and v["timestamp"]):
+                union[v["id"]] = v
 
-    if mejor:
-        print(f"[SEARCH] {len(mejor)} videos encontrados en el perfil.")
-        return mejor
+    if union:
+        resultado = sorted(union.values(), key=lambda v: v["timestamp"] or 0, reverse=True)
+        print(f"[SEARCH] {len(resultado)} videos encontrados en el perfil.")
+        return resultado
 
     print("[ERROR] No se pudo obtener la lista de videos de TikTok.")
     return []
