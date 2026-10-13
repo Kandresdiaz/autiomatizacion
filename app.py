@@ -6,8 +6,14 @@ import datetime
 import importlib
 import streamlit as st
 
+# Streamlit Cloud deja los modulos ya importados en memoria cuando hace pull del
+# codigo nuevo: sin este reload, app.py nuevo pide funciones que el modulo viejo
+# todavia no tiene y la app arranca con ImportError.
 import tiktok_crossposter
 importlib.reload(tiktok_crossposter)
+
+import ai_assistant
+importlib.reload(ai_assistant)
 
 from tiktok_crossposter import (
     run_crosspost_workflow,
