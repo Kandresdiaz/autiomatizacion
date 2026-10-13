@@ -1,7 +1,8 @@
 ﻿import os
 import json
+import datetime
 import requests
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 
 # ==============================================================================
 # CONFIGURACION Y DETECCION DE PROVEEDORES
@@ -139,7 +140,7 @@ Presenta una tabla clara con las siguientes columnas:
 # LLAMADAS A APIS (SIN DEPENDENCIAS EXTRA, SOLO REQUESTS)
 # ==============================================================================
 
-def call_gemini(api_key: str, prompt: str) -> str:
+def call_gemini(api_key: str, prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
     """Llama a Google Gemini API usando REST (modelo gemini-2.5-flash o gemini-1.5-flash)."""
     models = ["gemini-2.5-flash", "gemini-1.5-flash"]
     last_err = ""
@@ -151,7 +152,7 @@ def call_gemini(api_key: str, prompt: str) -> str:
             "contents": [
                 {
                     "parts": [
-                        {"text": f"{SYSTEM_PROMPT}\n\n{prompt}"}
+                        {"text": f"{system_prompt}\n\n{prompt}"}
                     ]
                 }
             ],
@@ -177,7 +178,8 @@ def call_gemini(api_key: str, prompt: str) -> str:
             
     raise RuntimeError(f"Fallo al contactar Gemini: {last_err}")
 
-def call_openai_compatible(api_key: str, prompt: str, base_url: str, model: str) -> str:
+def call_openai_compatible(api_key: str, prompt: str, base_url: str, model: str,
+                           system_prompt: str = SYSTEM_PROMPT) -> str:
     """Llama a OpenAI o Groq usando REST."""
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -186,7 +188,7 @@ def call_openai_compatible(api_key: str, prompt: str, base_url: str, model: str)
     payload = {
         "model": model,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.7,
@@ -200,18 +202,30 @@ def call_openai_compatible(api_key: str, prompt: str, base_url: str, model: str)
     else:
         raise RuntimeError(f"Error {resp.status_code}: {resp.text}")
 
-def generate_video_script(
-    input_data: Dict[str, Any],
-    style: str = "disruptive",
-    target_duration: int = 30,
-    config: Optional[Dict[str, str]] = None
-) -> Dict[str, Any]:
+PROVIDERS = {
+    "groq": ("https://api.groq.com/openai/v1/chat/completions", "llama-3.3-70b-versatile"),
+    "openai": ("https://api.openai.com/v1/chat/completions", "gpt-4o-mini"),
+}
+
+
+def call_provider(provider: str, api_key: str, prompt: str, system_prompt: str) -> str:
+    """Unico punto de salida hacia el proveedor detectado."""
+    if provider == "gemini":
+        return call_gemini(api_key, prompt, system_prompt)
+    if provider in PROVIDERS:
+        base_url, model = PROVIDERS[provider]
+        return call_openai_compatible(api_key, prompt, base_url, model, system_prompt)
+    raise RuntimeError(f"Proveedor no reconocido: {provider}")
+
+
+def run_ai_task(prompt: str, system_prompt: str,
+                config: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """
-    Funcion principal para generar un guion con microganchos.
-    Detecta automaticamente que proveedor de IA esta disponible.
+    Detecta el proveedor disponible y ejecuta la tarea. Todas las funciones de
+    IA del proyecto devuelven este mismo contrato.
     """
     provider, api_key = detect_ai_provider(config)
-    
+
     if not provider or not api_key:
         return {
             "success": False,
@@ -219,33 +233,12 @@ def generate_video_script(
             "message": "No hay ninguna API Key de IA configurada (GEMINI_API_KEY, GROQ_API_KEY u OPENAI_API_KEY).",
             "content": None
         }
-        
-    prompt = build_user_prompt(input_data, style=style, target_duration=target_duration)
-    
+
     try:
-        if provider == "gemini":
-            content = call_gemini(api_key, prompt)
-        elif provider == "groq":
-            content = call_openai_compatible(
-                api_key=api_key,
-                prompt=prompt,
-                base_url="https://api.groq.com/openai/v1/chat/completions",
-                model="llama-3.3-70b-versatile"
-            )
-        elif provider == "openai":
-            content = call_openai_compatible(
-                api_key=api_key,
-                prompt=prompt,
-                base_url="https://api.openai.com/v1/chat/completions",
-                model="gpt-4o-mini"
-            )
-        else:
-            return {"success": False, "provider": provider, "message": f"Proveedor no reconocido: {provider}"}
-            
         return {
             "success": True,
             "provider": provider,
-            "content": content
+            "content": call_provider(provider, api_key, prompt, system_prompt)
         }
     except Exception as e:
         return {
@@ -254,3 +247,286 @@ def generate_video_script(
             "message": f"Error al generar con {provider}: {str(e)}",
             "content": None
         }
+
+
+def generate_video_script(
+    input_data: Dict[str, Any],
+    style: str = "disruptive",
+    target_duration: int = 30,
+    config: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """
+    Genera un guion con microganchos a partir de un video o una idea.
+    Detecta automaticamente que proveedor de IA esta disponible.
+    """
+    prompt = build_user_prompt(input_data, style=style, target_duration=target_duration)
+    return run_ai_task(prompt, SYSTEM_PROMPT, config=config)
+
+# ==============================================================================
+# ASESOR VIRAL: ANALISIS DE RENDIMIENTO REAL ANTES DE DAR CONSEJOS
+# ==============================================================================
+
+ANALYST_SYSTEM_PROMPT = """Eres un analista de crecimiento y asesor de contenido viral para video corto (TikTok, Reels, Shorts).
+Recibes las METRICAS REALES de la cuenta de un creador y tu trabajo es decirle, con evidencia, por que un video funciono y otro no, y que hacer en el siguiente.
+
+REGLAS DE ORO OBLIGATORIAS:
+1. CERO CONSEJOS DE MANUAL: Queda prohibido decir 'usa hashtags virales', 'publica con constancia', 'engancha al espectador' o 'haz contenido de valor' si no van atados a un numero del reporte y a un COMO exacto y ejecutable.
+2. TODA AFIRMACION LLEVA SU DATO: Cada conclusion cita la cifra que la sostiene (vistas, engagement %, duracion en segundos, hora de publicacion, titulo del video). Si no hay dato que la sostenga, no la digas.
+3. DISTINGUE EL TIPO DE PROBLEMA:
+   - Pocas vistas = problema de ALCANCE: el gancho de los primeros 3 segundos, el tema o el formato no retienen.
+   - Muchas vistas con engagement bajo = problema de CONVERSION: falta provocar comentario, guardado o compartido.
+   - Vistas muy irregulares = el tema o el formato no es consistente; no es 'el algoritmo'.
+4. NO INVENTES METRICAS: solo existen las que te entregan. Si para concluir algo necesitas retencion por segundo, seguidores ganados o fuente de trafico, dilo explicitamente y di donde se ve (TikTok Studio > Analiticas).
+5. MUESTRA PEQUENA = HIPOTESIS: si hay menos de 5 videos con datos o las vistas son muy bajas, avisalo en la primera linea y presenta las conclusiones como hipotesis a testear, no como verdades.
+6. TONO: espanol neutro, directo, crudo, sin relleno corporativo. Prioriza tablas y listas accionables sobre parrafos.
+"""
+
+
+DIAS_SEMANA = ["lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo"]
+
+FRANJAS_HORARIAS = [
+    (0, 6, "00-06h (madrugada)"),
+    (6, 12, "06-12h (manana)"),
+    (12, 18, "12-18h (tarde)"),
+    (18, 24, "18-24h (noche)"),
+]
+
+
+def _porcentaje(parte: int, total: int) -> float:
+    return round(parte / total * 100, 2) if total else 0.0
+
+
+def _franja_horaria(hora: Optional[int]) -> str:
+    if hora is None:
+        return "sin fecha"
+    for inicio, fin, etiqueta in FRANJAS_HORARIAS:
+        if inicio <= hora < fin:
+            return etiqueta
+    return "sin fecha"
+
+
+def _rango_duracion(segundos: int) -> str:
+    if not segundos:
+        return "sin duracion"
+    if segundos <= 15:
+        return "0-15s"
+    if segundos <= 30:
+        return "16-30s"
+    if segundos <= 45:
+        return "31-45s"
+    return "46s+"
+
+
+def _agrupar(filas: List[Dict[str, Any]], clave: str) -> Dict[str, Dict[str, Any]]:
+    """Promedio de vistas y engagement por grupo (franja horaria, duracion, dia)."""
+    grupos: Dict[str, Dict[str, Any]] = {}
+    for fila in filas:
+        etiqueta = fila.get(clave) or "sin dato"
+        g = grupos.setdefault(etiqueta, {"n": 0, "vistas": [], "engagement": []})
+        g["n"] += 1
+        g["vistas"].append(fila["views"])
+        g["engagement"].append(fila["engagement"])
+    return {
+        etiqueta: {
+            "n": g["n"],
+            "views_promedio": round(sum(g["vistas"]) / g["n"]),
+            "engagement_promedio": round(sum(g["engagement"]) / g["n"], 2),
+        }
+        for etiqueta, g in grupos.items()
+    }
+
+
+def compute_performance_metrics(videos: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Calcula la evidencia numerica (engagement por video, promedios, mejores y
+    peores, comparativas por duracion / horario / dia) que la IA usara como base.
+    Todo el calculo es local y deterministico: la IA interpreta, no inventa.
+    """
+    filas: List[Dict[str, Any]] = []
+
+    for v in videos:
+        views = max(int(v.get("views") or 0), 0)
+        likes = max(int(v.get("likes") or 0), 0)
+        comments = max(int(v.get("comments") or 0), 0)
+        shares = max(int(v.get("shares") or 0), 0)
+        duration = max(int(v.get("duration") or 0), 0)
+
+        hora = None
+        dia = "sin fecha"
+        fecha = "sin fecha"
+        ts = int(v.get("timestamp") or 0)
+        if ts:
+            try:
+                dt = datetime.datetime.fromtimestamp(ts)
+                hora = dt.hour
+                dia = DIAS_SEMANA[dt.weekday()]
+                fecha = dt.strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                pass
+
+        titulo = (v.get("title") or "").strip() or "(sin titulo)"
+        filas.append({
+            "id": str(v.get("id") or ""),
+            "title": titulo,
+            "webpage_url": v.get("webpage_url", ""),
+            "views": views,
+            "likes": likes,
+            "comments": comments,
+            "shares": shares,
+            "duration": duration,
+            "engagement": _porcentaje(likes + comments + shares, views),
+            "like_rate": _porcentaje(likes, views),
+            "comment_rate": _porcentaje(comments, views),
+            "share_rate": _porcentaje(shares, views),
+            "fecha": fecha,
+            "hora": hora,
+            "franja": _franja_horaria(hora),
+            "dia": dia,
+            "rango_duracion": _rango_duracion(duration),
+            "largo_titulo": len(titulo),
+        })
+
+    if not filas:
+        return {"videos": [], "resumen": {}, "mejores": [], "peores": [],
+                "por_franja": {}, "por_duracion": {}, "por_dia": {}}
+
+    vistas = sorted(f["views"] for f in filas)
+    n = len(filas)
+    mediana = vistas[n // 2] if n % 2 else round((vistas[n // 2 - 1] + vistas[n // 2]) / 2)
+    por_vistas = sorted(filas, key=lambda f: f["views"], reverse=True)
+
+    resumen = {
+        "n": n,
+        "views_total": sum(vistas),
+        "views_promedio": round(sum(vistas) / n),
+        "views_mediana": mediana,
+        "views_max": vistas[-1],
+        "views_min": vistas[0],
+        "engagement_promedio": round(sum(f["engagement"] for f in filas) / n, 2),
+        "comment_rate_promedio": round(sum(f["comment_rate"] for f in filas) / n, 2),
+        "share_rate_promedio": round(sum(f["share_rate"] for f in filas) / n, 2),
+        "duracion_promedio": round(sum(f["duration"] for f in filas) / n),
+    }
+
+    return {
+        "videos": filas,
+        "resumen": resumen,
+        "mejores": por_vistas[:3],
+        "peores": list(reversed(por_vistas[-3:])),
+        "por_franja": _agrupar(filas, "franja"),
+        "por_duracion": _agrupar(filas, "rango_duracion"),
+        "por_dia": _agrupar(filas, "dia"),
+    }
+
+
+ANALYSIS_OUTPUT_SPEC = """ENTREGA TU RESPUESTA EXACTAMENTE CON ESTAS SECCIONES EN MARKDOWN:
+
+### 📊 Diagnostico (maximo 3 lineas)
+Di sin rodeos si el problema es de ALCANCE o de CONVERSION y con que cifra lo sostienes. Si la muestra es pequena, avisalo aqui.
+
+### 🏆 Patron de lo que SI funciona
+Compara los videos de arriba contra los de abajo, nombrandolos por su titulo. Que tienen en comun los mejores: tema, duracion, tipo de titulo, horario. Solo patrones que se vean en los numeros.
+
+### 🧨 Lo que te esta costando vistas
+Errores concretos detectados en los datos (duracion fuera del rango que te funciona, titulos que no abren curiosidad, cero compartidos, etc.). Cada punto con su cifra.
+
+### 🛠️ 5 acciones para el proximo video
+Tabla de 5 filas: | Accion exacta | Por que (dato que lo justifica) | Como se mide si funciono |
+
+### 🎯 3 ideas listas para grabar
+Por cada idea: tema + el gancho textual del segundo 0 (la frase exacta que se dice) + duracion objetivo en segundos. Basadas en lo que ya funciono en ESTA cuenta.
+
+### 📈 Que medir en los proximos 7 dias
+2 o 3 numeros concretos con la meta a superar, calculada desde los promedios de arriba."""
+
+
+def build_analysis_prompt(metrics: Dict[str, Any], account: str = "",
+                          extra_context: str = "", goal: str = "mas_vistas") -> str:
+    """Arma el reporte de datos que recibe la IA: cifras, sin adjetivos."""
+    resumen = metrics.get("resumen", {})
+    filas = metrics.get("videos", [])
+
+    objetivo = {
+        "mas_vistas": "ALCANCE. Quiere que mas gente nueva vea los videos (vistas).",
+        "mas_interaccion": "CONVERSION. Quiere mas comentarios, guardados y compartidos por vista.",
+        "mas_seguidores": "SEGUIDORES. Quiere convertir espectadores sueltos en seguidores de la cuenta.",
+        "vender": "VENTA. Quiere que el contenido traiga interesados reales en lo que ofrece.",
+    }.get(goal, "ALCANCE. Quiere mas vistas.")
+
+    lineas = [
+        f"CUENTA ANALIZADA: {account or 'cuenta de TikTok del creador'}",
+        f"OBJETIVO DEL CREADOR: {objetivo}",
+        "",
+        f"RESUMEN DE LOS ULTIMOS {resumen.get('n', 0)} VIDEOS CON DATOS:",
+        f"- Vistas totales: {resumen.get('views_total', 0)}",
+        f"- Vistas promedio: {resumen.get('views_promedio', 0)} | mediana: {resumen.get('views_mediana', 0)}",
+        f"- Mejor video: {resumen.get('views_max', 0)} vistas | peor video: {resumen.get('views_min', 0)} vistas",
+        f"- Engagement promedio ((likes+comentarios+compartidos) / vistas): {resumen.get('engagement_promedio', 0)}%",
+        f"- Tasa de comentarios promedio: {resumen.get('comment_rate_promedio', 0)}% | tasa de compartidos: {resumen.get('share_rate_promedio', 0)}%",
+        f"- Duracion promedio: {resumen.get('duracion_promedio', 0)}s",
+        "",
+        "DETALLE VIDEO POR VIDEO (del mas reciente al mas antiguo):",
+        "| # | Titulo / texto del video | Dur. | Publicado | Vistas | Likes | Coment. | Comp. | Engagement |",
+        "| - | - | - | - | - | - | - | - | - |",
+    ]
+
+    for i, f in enumerate(filas, start=1):
+        titulo = f["title"].replace("|", "/")[:70]
+        lineas.append(
+            f"| {i} | {titulo} | {f['duration']}s | {f['fecha']} ({f['dia']}) | "
+            f"{f['views']} | {f['likes']} | {f['comments']} | {f['shares']} | {f['engagement']}% |"
+        )
+
+    def bloque_grupo(titulo: str, datos: Dict[str, Dict[str, Any]]) -> None:
+        if not datos:
+            return
+        lineas.append("")
+        lineas.append(titulo)
+        for etiqueta, d in sorted(datos.items(), key=lambda kv: kv[1]["views_promedio"], reverse=True):
+            lineas.append(
+                f"- {etiqueta}: {d['n']} video(s), {d['views_promedio']} vistas promedio, "
+                f"{d['engagement_promedio']}% de engagement promedio"
+            )
+
+    bloque_grupo("COMPARATIVA POR DURACION DEL VIDEO:", metrics.get("por_duracion", {}))
+    bloque_grupo("COMPARATIVA POR FRANJA HORARIA DE PUBLICACION:", metrics.get("por_franja", {}))
+    bloque_grupo("COMPARATIVA POR DIA DE LA SEMANA:", metrics.get("por_dia", {}))
+
+    if extra_context.strip():
+        lineas.append("")
+        lineas.append(f"CONTEXTO QUE DA EL CREADOR (nicho, publico, que vende): {extra_context.strip()}")
+
+    lineas.append("")
+    lineas.append(ANALYSIS_OUTPUT_SPEC)
+
+    return "\n".join(lineas)
+
+
+def analyze_account_performance(
+    videos: List[Dict[str, Any]],
+    account: str = "",
+    extra_context: str = "",
+    goal: str = "mas_vistas",
+    config: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """
+    Asesor viral: analiza las metricas reales de los ultimos videos y devuelve un
+    diagnostico accionable. Las metricas calculadas se devuelven siempre, incluso
+    si la llamada a la IA falla, para que el dashboard pueda mostrarlas igual.
+    """
+    metrics = compute_performance_metrics(videos)
+
+    if not metrics["videos"]:
+        return {
+            "success": False,
+            "provider": None,
+            "message": ("No hay videos con metricas para analizar. Revisa el usuario de TikTok "
+                        "o intenta de nuevo (TikTok bloquea las consultas por rachas)."),
+            "content": None,
+            "metrics": metrics,
+        }
+
+    prompt = build_analysis_prompt(metrics, account=account, extra_context=extra_context, goal=goal)
+    resultado = run_ai_task(prompt, ANALYST_SYSTEM_PROMPT, config=config)
+    resultado["metrics"] = metrics
+    return resultado

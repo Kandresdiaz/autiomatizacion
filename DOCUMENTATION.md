@@ -8,9 +8,9 @@ Automatización gratuita en la nube para descargar automáticamente tus videos d
 
 ```
 tiktok-crossposter/
-├── app.py                      # Dashboard Web Frontend en Streamlit (Panel de Control, Programador e Ideas IA)
+├── app.py                      # Dashboard Web Frontend en Streamlit (Panel de Control, Programador y Asesor IA)
 ├── tiktok_crossposter.py       # Backend / Motor principal de descarga TikWM, captions IA y publicadores
-├── ai_assistant.py             # Módulo opcional de IA para análisis y generación de guiones con microganchos 3-5s
+├── ai_assistant.py             # Módulo opcional de IA: analisis de metricas (asesor viral) y guiones con microganchos 3-5s
 ├── processed_videos.json       # Historial de IDs de videos ya procesados
 ├── pending_queue.json          # Cola de videos programados para publicación progresiva
 ├── active_platforms.json       # Estado de activación de redes sociales (YouTube, IG, X, Reddit)
@@ -97,12 +97,23 @@ Existen 2 entornos independientes donde debes configurar tus llaves según cómo
 - **Botón 🔓 Desmarcar:** Permite convertir cualquier video marcado como `✅ Ya Publicado` de vuelta a `⏳ Pendiente` para reintentar su publicación.
 - **Botón 💡 Crear Guion IA:** Envía cualquier video del historial al asistente para desglosarlo y generar nuevos conceptos.
 
-### 💡 Pestaña 3: Ideas & Guiones IA (Opcional)
+### 🧠 Pestaña 3: Asesor IA de Videos (Opcional)
 - **100% Opcional:** Si no configuras ninguna clave de IA, el bot sigue publicando y funcionando con normalidad.
 - **Sin Dependencias Extra:** Funciona mediante llamadas directas HTTP REST con `requests` (sin paquetes pesados que rompan el entorno).
+- **Configuración en 30s:** Permite guardar `GEMINI_API_KEY` (gratis desde `aistudio.google.com`) directamente desde la interfaz en el `.env`. También acepta `GROQ_API_KEY` u `OPENAI_API_KEY`.
+
+#### 🔎 Sub-pestaña A: Análisis de Rendimiento (Asesor Viral)
+- **Métricas reales, no suposiciones:** Lee de TikTok las vistas, likes, comentarios, compartidos y duración de los últimos 3 a 15 videos (`fetch_videos_with_stats()` en `tiktok_crossposter.py`), con `yt-dlp` como fuente principal y TikWM como respaldo.
+- **Respaldo cuando TikTok bloquea el listado del perfil:** Si el scraper del perfil falla (pasa seguido desde IPs de datacenter), toma los videos del historial local `platform_status.json`, así el análisis nunca se queda sin fuente.
+- **Cálculo local y determinístico:** `compute_performance_metrics()` en `ai_assistant.py` calcula el engagement por video ((likes+comentarios+compartidos)/vistas), promedios, mediana, mejores y peores videos, y comparativas por duración, franja horaria y día de la semana. La IA solo interpreta esos números: no los inventa.
+- **Diagnóstico accionable:** El prompt del analista obliga a citar la cifra que sostiene cada afirmación, prohíbe los consejos de manual ("usa hashtags virales"), distingue problemas de **alcance** (pocas vistas = gancho/tema) de problemas de **conversión** (muchas vistas con poco engagement), y marca las conclusiones como hipótesis cuando hay menos de 5 videos.
+- **Salida:** Diagnóstico, patrón de lo que sí funciona, lo que está costando vistas, tabla de 5 acciones para el próximo video, 3 ideas listas para grabar con el gancho textual del segundo 0, y las metas numéricas a superar en 7 días. Descargable en Markdown.
+- **Objetivo configurable:** Más vistas, más interacción, más seguidores o vender; el asesor prioriza las recomendaciones según esa meta.
+- **Puente al generador:** Botón para mandar el video con mejor rendimiento directo al generador de guiones.
+
+#### ✍️ Sub-pestaña B: Generador de Guiones
 - **Ingeniería Anti-Clichés y Retención:** Prohíbe frases genéricas corporativas y saludos vacíos; fuerza arrancar en el segundo cero y generar micro-estímulos (zooms, cortes, SFX, texto) cada 3 a 5 segundos.
-- **Configuración en 30s:** Permite guardar `GEMINI_API_KEY` (gratis desde `aistudio.google.com`) directamente desde la interfaz en el `.env`.
-- **Modos de Creación:** A partir del último video, de cualquier video del historial, pegando un enlace o escribiendo una idea libre.
+- **Modos de Creación:** A partir del último video, de cualquier video del historial, del mejor video según el análisis, pegando un enlace o escribiendo una idea libre.
 - **Exportación:** Permite descargar el guion formateado en Markdown/TXT para teleprompter o guion de grabación.
 
 ---

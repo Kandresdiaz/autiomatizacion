@@ -22,12 +22,14 @@ from tiktok_crossposter import (
     remove_from_pending_queue,
     get_config,
     get_preview_play_url,
+    fetch_videos_with_stats,
     check_all_credentials
 )
 from ai_assistant import (
     detect_ai_provider,
     save_ai_key_to_env,
-    generate_video_script
+    generate_video_script,
+    analyze_account_performance
 )
 
 st.set_page_config(
@@ -196,7 +198,7 @@ tiktok_user = os.getenv("TIKTOK_USERNAME", "@b00kevin")
 st.markdown('<div class="main-container">', unsafe_allow_html=True)
 st.title("🤖 TikTok Multi-Platform Command Center")
 
-tab1, tab2, tab3 = st.tabs(["⚡ Panel Principal", "📅 Programador de Historial", "💡 Ideas & Guiones IA (Opcional)"])
+tab1, tab2, tab3 = st.tabs(["⚡ Panel Principal", "📅 Programador de Historial", "🧠 Asesor IA de Videos (Opcional)"])
 
 # ==============================================================================
 # TAB 1: PANEL PRINCIPAL
@@ -290,7 +292,7 @@ with tab1:
                 if st.button("💡 Usar este video para crear nuevos guiones con IA", key="btn_ai_seed_latest"):
                     st.session_state["ai_selected_video"] = latest
                     st.session_state["ai_source_type"] = "Último video de TikTok"
-                    st.toast("¡Video enviado al Asistente de Guiones IA! Ve a la pestaña '💡 Ideas & Guiones IA'.", icon="💡")
+                    st.toast("¡Video enviado al Asesor IA! Ve a la pestaña '🧠 Asesor IA de Videos' > '✍️ Generador de Guiones'.", icon="💡")
             else:
                 st.warning(f"No se detectaron videos para @{tiktok_user}.")
         st.markdown('</div>', unsafe_allow_html=True)
@@ -451,7 +453,7 @@ with tab2:
                 if st.button("💡 Crear Guion IA", key=f"ai_seed_{v['id']}"):
                     st.session_state["ai_selected_video"] = v
                     st.session_state["ai_source_type"] = f"Video: {v.get('title', v['id'])[:30]}"
-                    st.toast(f"¡Video {v['id']} cargado en 'Ideas & Guiones IA'!", icon="💡")
+                    st.toast(f"¡Video {v['id']} cargado en el Asesor IA (Generador de Guiones)!", icon="💡")
                 
             with c_status:
                 if is_proc:
@@ -542,18 +544,18 @@ with tab2:
     st.markdown('</div>', unsafe_allow_html=True)
 
 # ==============================================================================
-# TAB 3: IDEAS & GUIONES IA (OPCIONAL)
+# TAB 3: ASESOR IA (ANALISIS DE RENDIMIENTO + GUIONES)
 # ==============================================================================
 with tab3:
     st.markdown('<div class="controls-panel">', unsafe_allow_html=True)
-    st.markdown('<div class="section-title">💡 Generador de Guiones de Alta Retención (Microganchos 3-5s)</div>', unsafe_allow_html=True)
-    st.write("Crea guiones cinematográficos y dinámicos para Shorts/Reels/TikTok a partir de tus videos o ideas nuevas, sin frases clichés ni rodeos.")
-    
+    st.markdown('<div class="section-title">🧠 Asesor IA de Videos Virales</div>', unsafe_allow_html=True)
+    st.write("Analiza el rendimiento **real** de tus últimos TikToks (vistas, likes, comentarios y compartidos), te dice con datos qué está funcionando y convierte ese diagnóstico en guiones de alta retención.")
+
     ai_provider, ai_key = detect_ai_provider()
-    
+
     if not ai_provider:
         st.info("ℹ️ **Esta función es 100% opcional.** Si quieres usarla, solo necesitas una API Key de IA gratuita.")
-        
+
         with st.expander("🔑 Configuración Rápida en 30 segundos (Recomendado: Google Gemini GRATIS)", expanded=True):
             st.markdown("""
             **¿Cómo obtener tu clave de Google Gemini sin pagar nada y sin tarjeta de crédito?**
@@ -561,7 +563,7 @@ with tab3:
             2. Haz clic en **'Get API key'** y luego en **'Create API key'**.
             3. Cópiala y pégala aquí abajo:
             """)
-            
+
             c_key1, c_key2 = st.columns([3, 1])
             with c_key1:
                 gemini_input = st.text_input("Ingresa tu GEMINI_API_KEY:", type="password", placeholder="AIzaSy...")
@@ -575,94 +577,235 @@ with tab3:
                             st.rerun()
                     else:
                         st.warning("Por favor escribe o pega una clave válida.")
-                        
+
             st.caption("Nota: También puedes usar `GROQ_API_KEY` u `OPENAI_API_KEY` en tu archivo `.env` si prefieres Llama 3 o ChatGPT.")
     else:
         # Proveedor detectado
-        st.success(f"🟢 **Asistente de IA Activo:** Proveedor detectado (`{ai_provider.upper()}`). Listo para generar.")
-        
-        col_ai1, col_ai2 = st.columns([1.2, 1])
-        
-        with col_ai1:
-            st.markdown("#### 1. ¿En qué video o idea nos basamos?")
-            
-            preloaded_video = st.session_state.get("ai_selected_video")
-            preloaded_title = preloaded_video.get("title", "") if preloaded_video else ""
-            preloaded_url = preloaded_video.get("webpage_url", "") if preloaded_video else ""
-            
-            source_choice = st.radio(
-                "Origen del contenido:",
-                ["Video seleccionado / precargado", "Escribir idea o tema libre", "Pegar URL o título manual"],
-                index=0 if preloaded_video else 1
-            )
-            
-            video_payload = {}
-            if source_choice == "Video seleccionado / precargado":
-                if preloaded_video:
-                    st.info(f"📌 **Video cargado:** {preloaded_title or 'Sin título'} (`ID: {preloaded_video.get('id')}`)")
-                    video_payload = {
-                        "title": preloaded_title,
-                        "description": preloaded_title,
-                        "url": preloaded_url
-                    }
-                else:
-                    st.warning("No has seleccionado ningún video aún. Puedes ir a 'Panel Principal' o 'Programador de Historial' y pulsar '💡 Crear Guion IA', o elegir 'Escribir idea o tema libre'.")
-            elif source_choice == "Escribir idea o tema libre":
-                user_idea = st.text_area(
-                    "¿De qué quieres que hable el video?",
-                    placeholder="Ejemplo: Por qué los programadores no deberían usar loops infinitos / Cómo ganar clientes...",
-                    height=100
+        st.success(f"🟢 **Asistente de IA Activo:** Proveedor detectado (`{ai_provider.upper()}`). Listo para analizar y generar.")
+
+        tab_analisis, tab_guion = st.tabs([
+            "🔎 Análisis de Rendimiento (Asesor Viral)",
+            "✍️ Generador de Guiones"
+        ])
+
+        # ======================================================================
+        # 3.A - ASESOR VIRAL: DIAGNOSTICO CON METRICAS REALES
+        # ======================================================================
+        with tab_analisis:
+            st.markdown("#### 1. ¿Qué analizamos?")
+            col_an1, col_an2 = st.columns([1, 1])
+
+            with col_an1:
+                n_videos = st.slider(
+                    "Cantidad de videos recientes a analizar:",
+                    min_value=3, max_value=15, value=8,
+                    help="Mientras más videos, más confiable el patrón. Con menos de 5 el asesor te lo advertirá."
                 )
-                video_payload = {"user_idea": user_idea}
-            else:
-                manual_title = st.text_input("Título o tema del video:", placeholder="Ej: Las 3 herramientas que uso a diario...")
-                manual_url = st.text_input("Link de referencia (opcional):", placeholder="https://www.tiktok.com/@...")
-                video_payload = {"title": manual_title, "url": manual_url}
-                
-        with col_ai2:
-            st.markdown("#### 2. Configuración de Retención")
-            style_opt = st.selectbox(
-                "Ángulo psicológico del guion:",
-                [
-                    ("disruptive", "🔥 Polémico / Disruptivo (Rompe mitos / Ataca un error)"),
-                    ("quick_tutorial", "⚡ Tutorial Express (Paso a paso sin relleno)"),
-                    ("storytelling", "📖 Historia / Conflicto Rápido (Storytelling de 30s)"),
-                    ("top3_errors", "⚠️ Top 3 Errores Críticos (Alta curiosidad)")
-                ],
-                format_func=lambda x: x[1]
-            )[0]
-            
-            duration_opt = st.select_slider(
-                "Duración estimada del video:",
-                options=[15, 30, 45, 60],
-                value=30,
-                format_func=lambda x: f"{x} segundos"
-            )
-            
-        st.divider()
-        if st.button("⚡ GENERAR GUION DE ALTO IMPACTO (MICROGANCHOS CADA 3-5s)", key="btn_run_ai_gen"):
-            if not video_payload.get("title") and not video_payload.get("user_idea"):
-                st.error("Por favor define un tema o selecciona un video para que la IA sepa de qué escribir.")
-            else:
-                with st.spinner("Creando estructura de microganchos y guion de alta retención..."):
-                    result = generate_video_script(video_payload, style=style_opt, target_duration=duration_opt)
-                    if result.get("success"):
-                        st.session_state["ai_generated_result"] = result.get("content")
-                        st.toast("¡Guion generado con éxito!", icon="✨")
+                goal_opt = st.selectbox(
+                    "¿Cuál es tu objetivo ahora mismo?",
+                    [
+                        ("mas_vistas", "👀 Más vistas / alcance nuevo"),
+                        ("mas_interaccion", "💬 Más comentarios y compartidos"),
+                        ("mas_seguidores", "➕ Convertir espectadores en seguidores"),
+                        ("vender", "💰 Traer clientes / vender")
+                    ],
+                    format_func=lambda x: x[1]
+                )[0]
+
+            with col_an2:
+                extra_ctx = st.text_area(
+                    "Contexto de tu cuenta (opcional, mejora mucho el análisis):",
+                    placeholder="Ej: hablo de automatización con IA, mi público son emprendedores y vendo bots de WhatsApp...",
+                    height=150
+                )
+
+            st.caption("Las métricas se leen directo de TikTok. Si TikTok bloquea la consulta (pasa por rachas desde la nube), espera unos minutos y reintenta.")
+
+            if st.button("🔎 ANALIZAR MIS VIDEOS Y DARME EL DIAGNÓSTICO", key="btn_run_ai_analysis"):
+                barra = st.progress(0.0, text="Leyendo métricas de TikTok...")
+
+                def _avance(i, total, titulo):
+                    barra.progress(
+                        min(i / max(total, 1), 1.0),
+                        text=f"Leyendo métricas {i}/{total}: {titulo[:45]}"
+                    )
+
+                datos = fetch_videos_with_stats(tiktok_user, count=n_videos, on_progress=_avance)
+                barra.empty()
+
+                videos_stats = datos.get("videos", [])
+                fallidos = datos.get("failed", [])
+
+                if not videos_stats:
+                    st.error("No se pudieron leer las métricas de ningún video. TikTok bloquea las consultas por rachas: espera unos minutos y vuelve a intentarlo.")
+                else:
+                    with st.spinner("Cruzando tus números y armando el diagnóstico..."):
+                        res_an = analyze_account_performance(
+                            videos_stats,
+                            account=tiktok_user,
+                            extra_context=extra_ctx,
+                            goal=goal_opt
+                        )
+
+                    st.session_state["ai_analysis_metrics"] = res_an.get("metrics")
+                    if res_an.get("success"):
+                        st.session_state["ai_analysis_result"] = res_an.get("content")
+                        st.toast("¡Diagnóstico listo!", icon="📊")
                     else:
-                        st.error(f"Error al generar: {result.get('message')}")
-                        
-        if "ai_generated_result" in st.session_state:
-            st.markdown("### 📝 Guion y Estrategia Generada")
-            st.markdown(st.session_state["ai_generated_result"])
-            
-            st.download_button(
-                label="📥 Descargar Guion (.txt / .md)",
-                data=st.session_state["ai_generated_result"],
-                file_name="guion_tiktok_microganchos.md",
-                mime="text/markdown"
-            )
-            
+                        st.session_state.pop("ai_analysis_result", None)
+                        st.error(f"Se leyeron las métricas, pero la IA falló: {res_an.get('message')}")
+
+                if fallidos:
+                    nombres = ", ".join((f.get("title") or f.get("id", "?"))[:35] for f in fallidos[:5])
+                    st.warning(f"⚠️ Sin métricas para {len(fallidos)} video(s): {nombres}")
+
+            metrics_state = st.session_state.get("ai_analysis_metrics")
+            if metrics_state and metrics_state.get("videos"):
+                resumen = metrics_state.get("resumen", {})
+                st.divider()
+                st.markdown("#### 📊 Tus números reales")
+
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Videos analizados", resumen.get("n", 0))
+                m2.metric("Vistas promedio", f"{resumen.get('views_promedio', 0):,}".replace(",", "."))
+                m3.metric("Engagement promedio", f"{resumen.get('engagement_promedio', 0)}%")
+                m4.metric("Mejor video", f"{resumen.get('views_max', 0):,}".replace(",", ".") + " vistas")
+
+                st.dataframe(
+                    [
+                        {
+                            "Video": (f["title"] or "(sin título)")[:60],
+                            "Dur.": f"{f['duration']}s",
+                            "Publicado": f["fecha"],
+                            "Vistas": f["views"],
+                            "Likes": f["likes"],
+                            "Coment.": f["comments"],
+                            "Comp.": f["shares"],
+                            "Engagement": f"{f['engagement']}%"
+                        }
+                        for f in metrics_state["videos"]
+                    ],
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+                mejores = metrics_state.get("mejores") or []
+                if mejores:
+                    mejor = mejores[0]
+                    if st.button(
+                        f"💡 Crear un guion nuevo basado en mi mejor video ({mejor.get('views', 0)} vistas)",
+                        key="btn_ai_seed_best"
+                    ):
+                        st.session_state["ai_selected_video"] = {
+                            "id": mejor.get("id", ""),
+                            "title": mejor.get("title", ""),
+                            "webpage_url": mejor.get("webpage_url", "")
+                        }
+                        st.session_state["ai_source_type"] = "Mejor video por vistas"
+                        st.toast("Video cargado en la sub-pestaña '✍️ Generador de Guiones'.", icon="💡")
+
+            if st.session_state.get("ai_analysis_result"):
+                st.divider()
+                st.markdown("#### 🧠 Diagnóstico y plan de acción")
+                st.markdown(st.session_state["ai_analysis_result"])
+
+                st.download_button(
+                    label="📥 Descargar diagnóstico (.md)",
+                    data=st.session_state["ai_analysis_result"],
+                    file_name="analisis_viral_tiktok.md",
+                    mime="text/markdown",
+                    key="btn_dl_analysis"
+                )
+
+        # ======================================================================
+        # 3.B - GENERADOR DE GUIONES CON MICROGANCHOS
+        # ======================================================================
+        with tab_guion:
+            st.markdown('<div class="section-title">💡 Generador de Guiones de Alta Retención (Microganchos 3-5s)</div>', unsafe_allow_html=True)
+            st.write("Crea guiones cinematográficos y dinámicos para Shorts/Reels/TikTok a partir de tus videos o ideas nuevas, sin frases clichés ni rodeos.")
+
+            col_ai1, col_ai2 = st.columns([1.2, 1])
+
+            with col_ai1:
+                st.markdown("#### 1. ¿En qué video o idea nos basamos?")
+
+                preloaded_video = st.session_state.get("ai_selected_video")
+                preloaded_title = preloaded_video.get("title", "") if preloaded_video else ""
+                preloaded_url = preloaded_video.get("webpage_url", "") if preloaded_video else ""
+
+                source_choice = st.radio(
+                    "Origen del contenido:",
+                    ["Video seleccionado / precargado", "Escribir idea o tema libre", "Pegar URL o título manual"],
+                    index=0 if preloaded_video else 1
+                )
+
+                video_payload = {}
+                if source_choice == "Video seleccionado / precargado":
+                    if preloaded_video:
+                        st.info(f"📌 **Video cargado:** {preloaded_title or 'Sin título'} (`ID: {preloaded_video.get('id')}`)")
+                        video_payload = {
+                            "title": preloaded_title,
+                            "description": preloaded_title,
+                            "url": preloaded_url
+                        }
+                    else:
+                        st.warning("No has seleccionado ningún video aún. Puedes ir a 'Panel Principal', al 'Programador de Historial' o al '🔎 Análisis de Rendimiento' y pulsar el botón de crear guion, o elegir 'Escribir idea o tema libre'.")
+                elif source_choice == "Escribir idea o tema libre":
+                    user_idea = st.text_area(
+                        "¿De qué quieres que hable el video?",
+                        placeholder="Ejemplo: Por qué los programadores no deberían usar loops infinitos / Cómo ganar clientes...",
+                        height=100
+                    )
+                    video_payload = {"user_idea": user_idea}
+                else:
+                    manual_title = st.text_input("Título o tema del video:", placeholder="Ej: Las 3 herramientas que uso a diario...")
+                    manual_url = st.text_input("Link de referencia (opcional):", placeholder="https://www.tiktok.com/@...")
+                    video_payload = {"title": manual_title, "url": manual_url}
+
+            with col_ai2:
+                st.markdown("#### 2. Configuración de Retención")
+                style_opt = st.selectbox(
+                    "Ángulo psicológico del guion:",
+                    [
+                        ("disruptive", "🔥 Polémico / Disruptivo (Rompe mitos / Ataca un error)"),
+                        ("quick_tutorial", "⚡ Tutorial Express (Paso a paso sin relleno)"),
+                        ("storytelling", "📖 Historia / Conflicto Rápido (Storytelling de 30s)"),
+                        ("top3_errors", "⚠️ Top 3 Errores Críticos (Alta curiosidad)")
+                    ],
+                    format_func=lambda x: x[1]
+                )[0]
+
+                duration_opt = st.select_slider(
+                    "Duración estimada del video:",
+                    options=[15, 30, 45, 60],
+                    value=30,
+                    format_func=lambda x: f"{x} segundos"
+                )
+
+            st.divider()
+            if st.button("⚡ GENERAR GUION DE ALTO IMPACTO (MICROGANCHOS CADA 3-5s)", key="btn_run_ai_gen"):
+                if not video_payload.get("title") and not video_payload.get("user_idea"):
+                    st.error("Por favor define un tema o selecciona un video para que la IA sepa de qué escribir.")
+                else:
+                    with st.spinner("Creando estructura de microganchos y guion de alta retención..."):
+                        result = generate_video_script(video_payload, style=style_opt, target_duration=duration_opt)
+                        if result.get("success"):
+                            st.session_state["ai_generated_result"] = result.get("content")
+                            st.toast("¡Guion generado con éxito!", icon="✨")
+                        else:
+                            st.error(f"Error al generar: {result.get('message')}")
+
+            if "ai_generated_result" in st.session_state:
+                st.markdown("### 📝 Guion y Estrategia Generada")
+                st.markdown(st.session_state["ai_generated_result"])
+
+                st.download_button(
+                    label="📥 Descargar Guion (.txt / .md)",
+                    data=st.session_state["ai_generated_result"],
+                    file_name="guion_tiktok_microganchos.md",
+                    mime="text/markdown"
+                )
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 st.markdown('</div>', unsafe_allow_html=True)

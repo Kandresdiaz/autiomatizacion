@@ -2,6 +2,22 @@
 
 Todos los cambios notables realizados en este proyecto se registrarán en este archivo.
 
+## [2.8.0] - 2026-10-13
+### ✨ Añadido
+- **Asesor Viral con IA (análisis de rendimiento real):** Nueva sub-pestaña `🔎 Análisis de Rendimiento` dentro de la pestaña de IA. Lee de TikTok las métricas reales de los últimos 3 a 15 videos (vistas, likes, comentarios, compartidos, duración y hora de publicación) y entrega un diagnóstico accionable: si el problema es de **alcance** o de **conversión**, qué tienen en común los videos que sí funcionaron, qué está costando vistas, 5 acciones para el próximo video, 3 ideas con el gancho textual del segundo 0 y las metas numéricas a superar en 7 días. Descargable en Markdown.
+- **`fetch_videos_with_stats()` / `fetch_video_stats()` (`tiktok_crossposter.py`):** Lectura de métricas por video con `yt-dlp` (API de la app de TikTok primero) y respaldo en TikWM. Si TikTok bloquea el listado del perfil —habitual desde IPs de datacenter y hoy roto por un cambio del extractor (`Unable to extract secondary user ID`)—, `list_known_videos()` cae al historial local de `platform_status.json`, así el análisis nunca se queda sin fuente de videos.
+- **`compute_performance_metrics()` (`ai_assistant.py`):** Todo el cálculo (engagement por video, promedios, mediana, mejores/peores, comparativas por duración, franja horaria y día de la semana) es **local y determinístico**. La IA solo interpreta esos números, no los inventa.
+- **`ANALYST_SYSTEM_PROMPT` anti-consejo-genérico:** Obliga a citar la cifra que sostiene cada afirmación, prohíbe el consejo de manual ("usa hashtags virales", "publica con constancia"), distingue problemas de alcance de problemas de conversión, prohíbe inventar métricas que no existen (retención por segundo, seguidores ganados) y marca las conclusiones como hipótesis cuando hay menos de 5 videos con datos.
+- **Objetivo configurable del análisis:** Más vistas, más interacción, más seguidores o vender; el asesor prioriza las recomendaciones según esa meta, más un campo de contexto libre (nicho, público, qué vendes).
+- **Puente análisis ➔ guion:** Botón para mandar el video con mejor rendimiento directo al generador de guiones.
+
+### 🛠️ Modificado
+- **Pestaña 3 reorganizada:** `💡 Ideas & Guiones IA` pasa a ser `🧠 Asesor IA de Videos`, con dos sub-pestañas: `🔎 Análisis de Rendimiento` y `✍️ Generador de Guiones`. El generador de guiones conserva su comportamiento intacto.
+- **`ai_assistant.py` refactorizado:** `call_provider()` y `run_ai_task()` concentran la detección de proveedor y el manejo de errores en un solo lugar; `call_gemini()` y `call_openai_compatible()` aceptan ahora un `system_prompt` configurable, lo que permite tener dos personalidades de IA (guionista y analista) sin duplicar código de red.
+- `DOCUMENTATION.md`: Documentada la pestaña del Asesor IA con sus dos sub-pestañas y las funciones nuevas.
+
+---
+
 ## [2.7.0] - 2026-10-11
 ### 🐛 Corregido
 - **Corridas simultaneas que se pisaban el estado:** dos corridas solapadas escribian los mismos JSON y a una le rechazaban el `git push`, perdiendo el registro de lo que acababa de publicar (y el video se habria republicado en la siguiente corrida). El workflow ahora usa `concurrency: group: crosspost` y el push reintenta con rebase hasta 5 veces en vez de dejar la corrida en rojo.
