@@ -35,6 +35,8 @@ jobs:
       - name: Run TikTok Crossposter
         env:
           TIKTOK_USERNAME: ${{ secrets.TIKTOK_USERNAME }}
+          TIKTOK_SEC_UID: ${{ secrets.TIKTOK_SEC_UID }}
+          MAX_VIDEO_AGE_DAYS: ${{ vars.MAX_VIDEO_AGE_DAYS }}
           YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
           YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
           YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}

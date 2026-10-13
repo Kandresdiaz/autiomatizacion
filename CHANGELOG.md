@@ -18,6 +18,16 @@ Todos los cambios notables realizados en este proyecto se registrarán en este a
 
 ---
 
+## [2.8.0] - 2026-10-13
+### 🐛 Corregido
+- **Videos que se perdian al subir varios seguidos (causa raiz):** el workflow solo miraba los **3 videos mas recientes** del perfil (`videos[:3]`, una ventana por POSICION) y publica 1 por corrida. Al subir una rafaga, los que no cabian en el top 3 justo cuando corria el workflow quedaban descartados **para siempre**, porque las subidas posteriores los empujaban fuera de la ventana y nada los volvia a mirar. Se perdieron 3 videos reales asi: `7693225389581258036` y `7693230936573463814` (5-oct, dia de 5 subidas) y `7694772011624664321` (9-oct, dia de 3 subidas). Ahora la ventana es por FECHA (`MAX_VIDEO_AGE_DAYS`, 14 dias por defecto) y la cola se vacia del mas antiguo al mas nuevo, asi que la posicion en el perfil deja de importar.
+- **Escaneo del perfil fragil y sin fechas:** listar el perfil por su URL falla a ratos con `Unable to extract secondary user ID` y, cuando responde por la web, devuelve entradas **sin `timestamp`**, lo que impedia saber que video era nuevo. Ahora se prueba tambien la ruta `tiktokuser:<sec_uid>` (con el sec_uid resuelto desde un video ya conocido y cacheado, o fijado en `TIKTOK_SEC_UID`), y se escanean 20 videos en vez de 10 para que una rafaga quepa entera.
+
+### ✨ Añadido
+- Variables opcionales `TIKTOK_SEC_UID` (evita resolverlo en cada corrida) y `MAX_VIDEO_AGE_DAYS` (antiguedad maxima publicable), ambas en el workflow.
+
+---
+
 ## [2.7.0] - 2026-10-11
 ### 🐛 Corregido
 - **Corridas simultaneas que se pisaban el estado:** dos corridas solapadas escribian los mismos JSON y a una le rechazaban el `git push`, perdiendo el registro de lo que acababa de publicar (y el video se habria republicado en la siguiente corrida). El workflow ahora usa `concurrency: group: crosspost` y el push reintenta con rebase hasta 5 veces en vez de dejar la corrida en rojo.

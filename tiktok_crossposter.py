@@ -290,70 +290,135 @@ Responde SOLO con un JSON valido con esas 4 claves exactas."""
 # DETECCION DE VIDEOS EN TIKTOK (via yt-dlp)
 # ==============================================================================
 
-def fetch_latest_tiktok_videos(username: str, count: int = 10) -> List[Dict]:
-    """
-    Obtiene los últimos videos del perfil de TikTok usando yt-dlp.
-    Devuelve lista de dicts con id, title, webpage_url, upload_date, timestamp, thumbnail, duration.
-    """
-    clean_username = username.strip().replace("@", "")
-    profile_url = f"https://www.tiktok.com/@{clean_username}"
-    print(f"[SEARCH] Buscando los últimos {count} videos en TikTok @{clean_username}...")
+_SEC_UID_CACHE: Dict[str, str] = {}
 
+
+def resolve_tiktok_sec_uid(username: str, config: Optional[Dict] = None) -> Optional[str]:
+    """
+    Obtiene el identificador interno del perfil (sec_uid) que necesita la ruta
+    `tiktokuser:` de yt-dlp.
+
+    Se saca de cualquier video ya conocido del creador, porque pedirselo a la
+    pagina del perfil es justo lo que falla ("Unable to extract secondary user
+    ID") cuando TikTok sirve el reto anti-bot.
+    """
+    clean = username.strip().replace("@", "")
+    if clean in _SEC_UID_CACHE:
+        return _SEC_UID_CACHE[clean]
+
+    if config is None:
+        config = get_config()
+    desde_config = (config.get("TIKTOK_SEC_UID") or "").strip()
+    if desde_config:
+        _SEC_UID_CACHE[clean] = desde_config
+        return desde_config
+
+    # Cualquier video ya procesado sirve de ancla.
+    conocidos = load_processed_ids()
+    for video_id in reversed(conocidos[-5:]):
+        url = f"https://www.tiktok.com/@{clean}/video/{video_id}"
+        try:
+            opts = {
+                'quiet': True, 'no_warnings': True, 'skip_download': True,
+                'extractor_args': {'tiktok': {'app_info': ['']}},
+            }
+            with yt_dlp.YoutubeDL(opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+            sec_uid = (info or {}).get("channel_id")
+            if sec_uid:
+                print(f"[SEARCH] sec_uid del perfil resuelto desde el video {video_id}.")
+                _SEC_UID_CACHE[clean] = sec_uid
+                return sec_uid
+        except Exception:
+            continue
+    return None
+
+
+def _listar_perfil(origen: str, count: int, clean_username: str) -> List[Dict]:
+    """Extrae y normaliza las entradas de un listado de perfil de TikTok."""
     ydl_opts = {
         'extract_flat': 'in_playlist',
         'playlistend': count,
         'quiet': True,
         'no_warnings': True,
+        # Sin app_info, yt-dlp lista el perfil por la web, que TikTok responde con
+        # reto anti-bot desde datacenters y ademas devuelve entradas sin fecha.
+        'extractor_args': {'tiktok': {'app_info': ['']}},
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
             'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
         }
     }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(origen, download=False)
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(profile_url, download=False)
-            entries = info.get('entries', [])
-            videos = []
-            for e in entries:
-                video_id = str(e.get('id', ''))
-                if not video_id:
-                    continue
-                title = e.get('title') or e.get('description') or ""
-                webpage_url = e.get('url') or f"https://www.tiktok.com/@{clean_username}/video/{video_id}"
-                
-                # Extraer miniatura (cover)
-                thumbnail_url = ""
-                thumbnails = e.get('thumbnails') or []
-                if thumbnails and isinstance(thumbnails, list):
-                    thumbnail_url = thumbnails[0].get('url', '')
-                
-                # Extraer timestamp y formato de fecha
-                ts = e.get('timestamp')
-                upload_date_str = ""
-                if ts:
-                    try:
-                        dt = datetime.datetime.fromtimestamp(ts)
-                        upload_date_str = dt.strftime("%Y-%m-%d %H:%M")
-                    except Exception:
-                        pass
-                
-                duration = e.get('duration') or 0
+    videos = []
+    for e in (info.get('entries') or []):
+        video_id = str(e.get('id', ''))
+        if not video_id:
+            continue
+        thumbnails = e.get('thumbnails') or []
+        thumbnail_url = thumbnails[0].get('url', '') if thumbnails else ''
 
-                videos.append({
-                    "id": video_id,
-                    "title": title,
-                    "webpage_url": webpage_url,
-                    "timestamp": ts or 0,
-                    "upload_date": upload_date_str,
-                    "thumbnail": thumbnail_url,
-                    "duration": duration
-                })
-            if videos:
-                print(f"[SEARCH] {len(videos)} videos encontrados en el perfil.")
-                return videos
-    except Exception as e:
-        print(f"[WARNING] yt-dlp: {e}")
+        ts = e.get('timestamp')
+        upload_date_str = ""
+        if ts:
+            try:
+                upload_date_str = datetime.datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                pass
+
+        videos.append({
+            "id": video_id,
+            "title": e.get('title') or e.get('description') or "",
+            "webpage_url": e.get('url') or f"https://www.tiktok.com/@{clean_username}/video/{video_id}",
+            "timestamp": ts or 0,
+            "upload_date": upload_date_str,
+            "thumbnail": thumbnail_url,
+            "duration": e.get('duration') or 0,
+        })
+    return videos
+
+
+def fetch_latest_tiktok_videos(username: str, count: int = 20, config: Optional[Dict] = None) -> List[Dict]:
+    """
+    Obtiene los últimos videos del perfil de TikTok usando yt-dlp.
+    Devuelve lista de dicts con id, title, webpage_url, upload_date, timestamp, thumbnail, duration.
+
+    Se prueban dos rutas porque la de la URL del perfil falla a ratos y, cuando
+    responde por la web, devuelve entradas SIN fecha, lo que impide saber que
+    video es nuevo.
+    """
+    clean_username = username.strip().replace("@", "")
+    print(f"[SEARCH] Buscando los últimos {count} videos en TikTok @{clean_username}...")
+
+    intentos = [("url del perfil", f"https://www.tiktok.com/@{clean_username}")]
+    sec_uid = resolve_tiktok_sec_uid(clean_username, config)
+    if sec_uid:
+        intentos.append(("sec_uid del perfil", f"tiktokuser:{sec_uid}"))
+
+    mejor: List[Dict] = []
+    for nombre, origen in intentos:
+        try:
+            videos = _listar_perfil(origen, count, clean_username)
+        except Exception as e:
+            print(f"[SEARCH] Ruta '{nombre}' fallida: {str(e)[:140]}")
+            continue
+        if not videos:
+            print(f"[SEARCH] Ruta '{nombre}' no devolvio videos.")
+            continue
+
+        con_fecha = sum(1 for v in videos if v["timestamp"])
+        print(f"[SEARCH] Ruta '{nombre}': {len(videos)} videos ({con_fecha} con fecha).")
+        if len(videos) > len(mejor) or con_fecha > sum(1 for v in mejor if v["timestamp"]):
+            mejor = videos
+        # Un listado completo y fechado es todo lo que hace falta.
+        if con_fecha == len(videos):
+            break
+
+    if mejor:
+        print(f"[SEARCH] {len(mejor)} videos encontrados en el perfil.")
+        return mejor
 
     print("[ERROR] No se pudo obtener la lista de videos de TikTok.")
     return []
@@ -1381,6 +1446,59 @@ def crosspost_from_url(video_url: str, config: Optional[Dict] = None) -> Dict:
     print(f"[DIRECT URL] Procesando publicación directa desde URL: {clean_url}")
     return crosspost_single_video(video_info, config)
 
+# Antiguedad maxima de un video del perfil para considerarlo publicable. Existe
+# para no resucitar el backlog historico que el creador ya habia subido a mano;
+# el registro de processed_videos.json es la salvaguarda principal.
+MAX_VIDEO_AGE_DAYS = 14
+
+
+def select_new_videos(videos: List[Dict], processed_ids: List[str], config: Optional[Dict] = None) -> List[Dict]:
+    """
+    Devuelve los videos del perfil que faltan por publicar, del mas antiguo al mas nuevo.
+
+    Antes esto era `videos[:3]`: una ventana por POSICION. Al subir varios videos
+    seguidos, los que no cabian en el top 3 cuando corria el workflow quedaban
+    descartados para siempre, porque las subidas posteriores los empujaban fuera
+    de la ventana y nada los volvia a mirar. Ahora la ventana es por FECHA, asi
+    que la posicion en el perfil deja de importar.
+    """
+    if config is None:
+        config = get_config()
+    try:
+        dias = int(str(config.get("MAX_VIDEO_AGE_DAYS", MAX_VIDEO_AGE_DAYS)).strip())
+    except ValueError:
+        dias = MAX_VIDEO_AGE_DAYS
+
+    procesados = set(processed_ids)
+    limite = (datetime.datetime.now() - datetime.timedelta(days=dias)).timestamp()
+
+    candidatos = []
+    sin_fecha = []
+    por_antiguedad = 0
+    for pos, v in enumerate(videos):
+        if v.get("id") in procesados:
+            continue
+        ts = v.get("timestamp") or 0
+        if not ts:
+            # Sin fecha no se puede acotar por antiguedad: se acepta solo si esta
+            # entre los primeros del perfil, que es el comportamiento antiguo.
+            if pos < 3:
+                sin_fecha.append(v)
+            continue
+        if ts >= limite:
+            candidatos.append(v)
+        else:
+            por_antiguedad += 1
+
+    candidatos.sort(key=lambda v: v.get("timestamp") or 0)
+    resultado = candidatos + sin_fecha
+
+    if por_antiguedad:
+        print(f"[SEARCH] {por_antiguedad} video(s) del perfil se ignoran por tener mas de {dias} dias "
+              "(backlog antiguo ya publicado a mano).")
+    return resultado
+
+
 def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
     """
     Ejecuta el flujo completo:
@@ -1408,21 +1526,24 @@ def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
     force_run = bool(config.get("FORCE_RUN"))
 
     # 1. Buscar videos recientes en TikTok
-    videos = fetch_latest_tiktok_videos(tiktok_username, count=10)
+    videos = fetch_latest_tiktok_videos(tiktok_username, count=20, config=config)
 
     if force_run and videos:
         print("[WORKFLOW] Ejecución forzada: procesando último video detectado.")
         return crosspost_single_video(videos[0], config)
 
     processed_ids = load_processed_ids()
-    # Solo consideramos los videos más recientes (top 3) para evitar
-    # publicar videos antiguos del historial que el usuario ya había subido antes
-    recent_candidates = videos[:3] if len(videos) >= 3 else videos
-    new_videos = [v for v in recent_candidates if v["id"] not in processed_ids]
+    new_videos = select_new_videos(videos, processed_ids, config)
 
     if new_videos:
-        print(f"[WORKFLOW] Nuevo video reciente detectado en el perfil: {new_videos[0]['id']}")
-        return crosspost_single_video(new_videos[0], config)
+        # El mas antiguo primero: asi una rafaga de subidas se vacia en el mismo
+        # orden en que se publico en TikTok, en vez de dejar colgados los de atras.
+        elegido = new_videos[0]
+        if len(new_videos) > 1:
+            print(f"[WORKFLOW] {len(new_videos)} videos pendientes de publicar. "
+                  f"Se procesa 1 por corrida, empezando por el mas antiguo.")
+        print(f"[WORKFLOW] Nuevo video reciente detectado en el perfil: {elegido['id']}")
+        return crosspost_single_video(elegido, config)
 
     # 2. Reintentar redes que quedaron pendientes en algun video ya procesado
     #    (ej: publicacion parcial por un token vencido que ya fue renovado)
