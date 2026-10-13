@@ -1499,7 +1499,17 @@ def crosspost_from_url(video_url: str, config: Optional[Dict] = None) -> Dict:
 # Antiguedad maxima de un video del perfil para considerarlo publicable. Existe
 # para no resucitar el backlog historico que el creador ya habia subido a mano;
 # el registro de processed_videos.json es la salvaguarda principal.
-MAX_VIDEO_AGE_DAYS = 14
+#
+# Estuvo en 14 dias y el 13-oct eso republico 3 videos (5-oct, 5-oct y 9-oct) a
+# Instagram y YouTube: el listado del perfil que TikTok devolvia a los runners de
+# GitHub omitia esos videos, asi que nunca entraron en processed_videos.json. Al
+# arreglarse el listado (ruta sec_uid + escaneo de 40), el robot los vio por
+# primera vez, los encontro dentro de la ventana de 14 dias y los publico.
+#
+# 2 dias cubre de sobra el ciclo de 2 horas del workflow. Un video de hace mas de
+# 2 dias que el robot nunca ha visto no es contenido nuevo: es un hueco en el
+# registro, y publicarlo es justo lo que no se quiere.
+MAX_VIDEO_AGE_DAYS = 2
 
 
 def select_new_videos(videos: List[Dict], processed_ids: List[str], config: Optional[Dict] = None) -> List[Dict]:

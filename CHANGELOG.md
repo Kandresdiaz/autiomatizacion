@@ -2,6 +2,12 @@
 
 Todos los cambios notables realizados en este proyecto se registrarán en este archivo.
 
+## [2.9.1] - 2026-10-13
+### 🐛 Corregido
+- **Republicación de 3 videos viejos a Instagram y YouTube (`MAX_VIDEO_AGE_DAYS` 14 ➔ 2):** El 13-oct el robot resubió los TikToks del 5-oct 11:44, 5-oct 12:05 y 9-oct 15:46, que ya estaban en esas redes. No era un fallo del registro: el listado de perfil que TikTok devolvía a los runners de GitHub (IPs de EE.UU.) **omitía esos videos**, así que el robot nunca los había visto ni anotado en `processed_videos.json`. Al repararse el listado (ruta `sec_uid`, escaneo de 40, fusión de ambas rutas) aparecieron por primera vez, cayeron dentro de la ventana de 14 días y se publicaron como si fueran nuevos. La ventana arrastraba un riesgo invisible: cada hueco del listado era un video esperando a resucitar el día que el listado mejorara. Con 2 días (el workflow corre cada 2 horas) un video que el robot nunca ha visto y tiene más de 2 días se trata como lo que es, un hueco en el registro, y no se publica.
+
+---
+
 ## [2.9.0] - 2026-10-13
 ### ✨ Añadido
 - **Modo ganchos (`generate_hooks()`):** Nueva salida minimalista pensada para quien no graba el guion al pie de la letra. Un campo, un botón y **10 aperturas para los primeros 3 segundos**, cada una con su frase exacta, su visual y su ángulo. `HOOKS_SYSTEM_PROMPT` limita a 12 palabras por frase, prohíbe saludos, presentaciones y tono publicitario, y obliga a un ángulo distinto por gancho.
