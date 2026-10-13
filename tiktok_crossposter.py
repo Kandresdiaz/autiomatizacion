@@ -392,10 +392,14 @@ def fetch_latest_tiktok_videos(username: str, count: int = 20, config: Optional[
     clean_username = username.strip().replace("@", "")
     print(f"[SEARCH] Buscando los últimos {count} videos en TikTok @{clean_username}...")
 
-    intentos = [("url del perfil", f"https://www.tiktok.com/@{clean_username}")]
+    # El sec_uid va primero: la URL del perfil devuelve listados INCOMPLETOS
+    # (se deja fuera videos que si existen), mientras que la ruta por sec_uid
+    # usa la API de la app y trae el perfil entero con fechas.
+    intentos = []
     sec_uid = resolve_tiktok_sec_uid(clean_username, config)
     if sec_uid:
         intentos.append(("sec_uid del perfil", f"tiktokuser:{sec_uid}"))
+    intentos.append(("url del perfil", f"https://www.tiktok.com/@{clean_username}"))
 
     mejor: List[Dict] = []
     for nombre, origen in intentos:
@@ -1496,6 +1500,10 @@ def select_new_videos(videos: List[Dict], processed_ids: List[str], config: Opti
     if por_antiguedad:
         print(f"[SEARCH] {por_antiguedad} video(s) del perfil se ignoran por tener mas de {dias} dias "
               "(backlog antiguo ya publicado a mano).")
+    if not resultado:
+        print(f"[SEARCH] Nada nuevo que publicar: de los {len(videos)} videos del perfil, "
+              f"{len(videos) - por_antiguedad} ya estan registrados y {por_antiguedad} quedan fuera "
+              f"de la ventana de {dias} dias.")
     return resultado
 
 
