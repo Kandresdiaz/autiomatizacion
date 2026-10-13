@@ -9,6 +9,7 @@ Automatización **100% gratuita y en la nube** para descargar automáticamente t
 - **Dashboard Web de Control (Frontend):** Interfaz construida en Python con Streamlit para configurar credenciales, probar publicaciones y ver logs en tiempo real.
 - **Sin Marcas de Agua:** Utiliza la API gratuita de TikWM para obtener el archivo `.mp4` limpio.
 - **100% en la Nube:** Corre de fondo en **GitHub Actions** cada 2 horas o a través de **Streamlit Cloud** sin ocupar espacio en tu computadora.
+- **Asesor Viral con IA (Opcional):** Analiza las métricas reales de tus últimos TikToks (vistas, likes, comentarios, compartidos, duración y horario) y te dice con datos qué está funcionando, qué te está costando vistas y qué grabar después. Luego convierte ese diagnóstico en guiones con microganchos cada 3-5s.
 - **Memoria de Duplicados:** Guarda los IDs de videos procesados en `processed_videos.json` para no repetir publicaciones.
 
 ---
@@ -19,6 +20,7 @@ Automatización **100% gratuita y en la nube** para descargar automáticamente t
 tiktok-crossposter/
 ├── app.py                      # Interfaz Web Frontend (Streamlit Dashboard)
 ├── tiktok_crossposter.py       # Backend / Motor de automatización en Python
+├── ai_assistant.py             # Asesor IA opcional: análisis de métricas y guiones virales
 ├── requirements.txt            # Dependencias
 ├── processed_videos.json       # Historial de videos procesados
 └── .github/

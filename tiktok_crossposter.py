@@ -522,6 +522,154 @@ def download_video_via_ytdlp(video_info: Dict) -> Tuple[str, str]:
 
     raise RuntimeError("yt-dlp no pudo descargar el video. " + " | ".join(errores))
 
+# ==============================================================================
+# METRICAS REALES POR VIDEO (BASE DEL ASESOR VIRAL CON IA)
+# ==============================================================================
+
+def _stats_desde_ytdlp(webpage_url: str) -> Optional[Dict]:
+    """
+    Metricas y metadatos de un video con yt-dlp, sin descargar el mp4.
+    Se intenta primero la API de la app de TikTok (la web responde con reto
+    anti-bot desde IPs de datacenter, igual que en la descarga).
+    """
+    base_opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'noprogress': True,
+        'skip_download': True,
+        'http_headers': {
+            'User-Agent': TIKWM_USER_AGENTS[0],
+            'Accept-Language': 'es-ES,es;q=0.9,en;q=0.8',
+        },
+    }
+    rutas = [
+        ("API de la app de TikTok", {'extractor_args': {'tiktok': {'app_info': ['']}}}),
+        ("pagina web de TikTok", {}),
+    ]
+
+    for nombre, extra in rutas:
+        try:
+            with yt_dlp.YoutubeDL({**base_opts, **extra}) as ydl:
+                info = ydl.extract_info(webpage_url, download=False)
+        except Exception as e:
+            print(f"[STATS] yt-dlp fallo por {nombre}: {str(e)[:120]}")
+            continue
+        if not info:
+            continue
+        return {
+            "id": str(info.get("id") or ""),
+            "title": (info.get("title") or info.get("description") or "").strip(),
+            "webpage_url": info.get("webpage_url") or webpage_url,
+            "duration": int(info.get("duration") or 0),
+            "timestamp": int(info.get("timestamp") or 0),
+            "views": int(info.get("view_count") or 0),
+            "likes": int(info.get("like_count") or 0),
+            "comments": int(info.get("comment_count") or 0),
+            "shares": int(info.get("repost_count") or 0),
+            "source": "yt-dlp",
+        }
+    return None
+
+
+def _stats_desde_tikwm(webpage_url: str) -> Optional[Dict]:
+    """Respaldo: la misma consulta de descarga de TikWM ya trae los contadores."""
+    data, err = _tikwm_pedir(webpage_url, "post", TIKWM_RUTAS[0][1], TIKWM_USER_AGENTS[0])
+    if not data:
+        print(f"[STATS] TikWM no devolvio metricas: {err}")
+        return None
+    return {
+        "id": str(data.get("id") or data.get("video_id") or ""),
+        "title": (data.get("title") or "").strip(),
+        "webpage_url": webpage_url,
+        "duration": int(data.get("duration") or 0),
+        "timestamp": int(data.get("create_time") or 0),
+        "views": int(data.get("play_count") or 0),
+        "likes": int(data.get("digg_count") or 0),
+        "comments": int(data.get("comment_count") or 0),
+        "shares": int(data.get("share_count") or 0),
+        "source": "tikwm",
+    }
+
+
+def fetch_video_stats(webpage_url: str) -> Optional[Dict]:
+    """Vistas, likes, comentarios, compartidos y duracion reales de un video."""
+    if not webpage_url:
+        return None
+    for obtener in (_stats_desde_ytdlp, _stats_desde_tikwm):
+        datos = obtener(webpage_url)
+        if datos and (datos.get("views") or datos.get("likes")):
+            return datos
+    return None
+
+
+def list_known_videos(username: str, count: int = 8) -> List[Dict]:
+    """
+    Videos candidatos a analizar. Primero el perfil de TikTok; si TikTok
+    bloquea el listado (habitual desde IPs de datacenter y por cambios del
+    extractor), se cae al historial local de platform_status.json, que ya
+    guarda id, titulo y URL de todo lo que el robot proceso.
+    """
+    try:
+        videos = fetch_latest_tiktok_videos(username, count=count)
+    except Exception as e:
+        print(f"[STATS] No se pudo listar el perfil: {str(e)[:120]}")
+        videos = []
+
+    if videos:
+        return videos[:count]
+
+    print("[STATS] Usando el historial local (platform_status.json) como fuente de videos.")
+    locales = [
+        {
+            "id": video_id,
+            "title": entry.get("title", ""),
+            "webpage_url": entry.get("webpage_url", ""),
+        }
+        for video_id, entry in load_platform_status().items()
+        if entry.get("webpage_url")
+    ]
+    # Los IDs de TikTok crecen con el tiempo: ordenar desc = mas recientes primero.
+    locales.sort(key=lambda v: v["id"], reverse=True)
+    return locales[:count]
+
+
+def fetch_videos_with_stats(username: str, count: int = 8, on_progress=None) -> Dict:
+    """
+    Trae los ultimos `count` videos con sus metricas reales.
+    Devuelve {"videos": [...], "failed": [...]} para que el dashboard pueda
+    avisar con precision cuando TikTok bloquea la consulta de algun video.
+    """
+    candidatos = list_known_videos(username, count=count)
+    total = len(candidatos)
+    con_metricas: List[Dict] = []
+    fallidos: List[Dict] = []
+
+    for i, base in enumerate(candidatos, start=1):
+        titulo = base.get("title") or base.get("id", "")
+        if on_progress:
+            try:
+                on_progress(i, total, titulo)
+            except Exception:
+                pass
+
+        stats = fetch_video_stats(base.get("webpage_url", ""))
+        if not stats:
+            fallidos.append({"id": base.get("id", ""), "title": titulo})
+            continue
+
+        stats["id"] = stats.get("id") or base.get("id", "")
+        stats["title"] = stats.get("title") or base.get("title", "")
+        if not stats.get("timestamp") and base.get("timestamp"):
+            stats["timestamp"] = int(base["timestamp"])
+        if not stats.get("duration") and base.get("duration"):
+            stats["duration"] = int(base["duration"])
+        con_metricas.append(stats)
+
+    con_metricas.sort(key=lambda v: v.get("timestamp") or 0, reverse=True)
+    print(f"[STATS] {len(con_metricas)} video(s) con metricas, {len(fallidos)} sin datos.")
+    return {"videos": con_metricas, "failed": fallidos}
+
+
 def get_preview_play_url(webpage_url: str) -> Optional[str]:
     """Obtiene la URL directa de video MP4 desde TikWM para previsualización en el dashboard."""
     try:
