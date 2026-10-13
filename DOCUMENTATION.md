@@ -111,10 +111,12 @@ Existen 2 entornos independientes donde debes configurar tus llaves según cómo
 - **Objetivo configurable:** Más vistas, más interacción, más seguidores o vender; el asesor prioriza las recomendaciones según esa meta.
 - **Puente al generador:** Botón para mandar el video con mejor rendimiento directo al generador de guiones.
 
-#### ✍️ Sub-pestaña B: Generador de Guiones
-- **Ingeniería Anti-Clichés y Retención:** Prohíbe frases genéricas corporativas y saludos vacíos; fuerza arrancar en el segundo cero y generar micro-estímulos (zooms, cortes, SFX, texto) cada 3 a 5 segundos.
-- **Modos de Creación:** A partir del último video, de cualquier video del historial, del mejor video según el análisis, pegando un enlace o escribiendo una idea libre.
-- **Exportación:** Permite descargar el guion formateado en Markdown/TXT para teleprompter o guion de grabación.
+#### 🎣 Sub-pestaña B: Ganchos & Guiones
+- **Modo ganchos (lo principal):** Escribes de qué va el video y devuelve **10 aperturas distintas para los primeros 3 segundos**: la frase exacta que se dice, el visual que la acompaña y el ángulo usado (dolor, demostración, error, contraintuitivo, cifra, objeción...). Sin tabla, sin CTA, sin relleno: está pensado para el creador que no sigue un guion al pie de la letra pero necesita con qué abrir.
+- **Calibrado con tus datos:** Si ya corriste el análisis, `build_account_context()` inyecta en el prompt las vistas promedio, el engagement, la duración que mejor funciona y los títulos actuales con la instrucción de **no repetir ese tono**. Sin análisis previo funciona igual, pero a ciegas.
+- **Reglas del modo ganchos:** Máximo 12 palabras por frase, prohibidos los saludos y las presentaciones, prohibido el tono publicitario, un ángulo distinto por gancho y visuales grabables con un celular o una grabación de pantalla.
+- **Guion completo (plegado):** El generador de guiones con microganchos cada 3-5s sigue disponible dentro del desplegable, y también recibe el contexto de la cuenta.
+- **Exportación:** Ganchos y guion se descargan en Markdown.
 
 ---
 

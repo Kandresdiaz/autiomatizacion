@@ -92,7 +92,8 @@ REGLAS DE ORO OBLIGATORIAS (PROHIBIDO EL CONTENIDO GENERICO / 'HABLAR TONTERIAS'
 5. FORMATO DE RESPUESTA: Siempre responde en espanol neutro y entrega el guion estructurado como tabla o bloques temporales listos para produccion.
 """
 
-def build_user_prompt(input_data: Dict[str, Any], style: str = "disruptive", target_duration: int = 30) -> str:
+def build_user_prompt(input_data: Dict[str, Any], style: str = "disruptive", target_duration: int = 30,
+                      account_context: str = "") -> str:
     title = input_data.get("title", "")
     description = input_data.get("description", "")
     url = input_data.get("url", "")
@@ -114,6 +115,8 @@ INFORMACION DE ENTRADA / INSPIRACION:
 - Titulo/Idea original: {title or user_idea}
 - Contexto o descripcion: {description or 'N/A'}
 {f'- Link del video de referencia: {url}' if url else ''}
+
+{account_context}
 
 INSTRUCCIONES DE SALIDA:
 Entrega tu respuesta estructurada exactamente con las siguientes secciones en Markdown:
@@ -253,13 +256,16 @@ def generate_video_script(
     input_data: Dict[str, Any],
     style: str = "disruptive",
     target_duration: int = 30,
+    account_context: str = "",
     config: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """
     Genera un guion con microganchos a partir de un video o una idea.
-    Detecta automaticamente que proveedor de IA esta disponible.
+    Con account_context (del analisis) calibra el guion a los numeros
+    reales de la cuenta en vez de escribir a ciegas.
     """
-    prompt = build_user_prompt(input_data, style=style, target_duration=target_duration)
+    prompt = build_user_prompt(input_data, style=style, target_duration=target_duration,
+                               account_context=account_context)
     return run_ai_task(prompt, SYSTEM_PROMPT, config=config)
 
 # ==============================================================================
@@ -530,3 +536,98 @@ def analyze_account_performance(
     resultado = run_ai_task(prompt, ANALYST_SYSTEM_PROMPT, config=config)
     resultado["metrics"] = metrics
     return resultado
+# ==============================================================================
+# MODO GANCHOS: SOLO LAS APERTURAS DE LOS PRIMEROS 3 SEGUNDOS
+# ==============================================================================
+
+HOOKS_SYSTEM_PROMPT = """Eres un especialista en ganchos de apertura para video corto (TikTok, Reels, Shorts).
+Tu unico trabajo son los PRIMEROS 3 SEGUNDOS: la frase exacta que se dice en voz alta y lo que se ve en pantalla mientras se dice.
+
+REGLAS DE ORO OBLIGATORIAS:
+1. SOLO EL GANCHO: no escribes el guion, ni el desarrollo, ni el cierre, ni el CTA. Nada de lo que pasa despues del segundo 3.
+2. PROHIBIDO: saludos ('hola', 'que tal'), presentaciones ('en este video', 'hoy te voy a ensenar'), rellenos ('quedate hasta el final', 'alguna vez te has preguntado').
+3. PROHIBIDO EL TONO PUBLICITARIO: nada que suene a eslogan o a promesa de venta. Si el gancho se pudiera poner en un banner de anuncio, no sirve.
+4. MAXIMO 12 PALABRAS por frase. Se dice en 3 segundos o menos, en voz natural.
+5. UN ANGULO DISTINTO POR GANCHO: no entregues 10 variaciones de la misma idea.
+6. GRABABLE: el visual tiene que poder hacerse con un celular, una grabacion de pantalla o lo que el creador ya tiene a mano. Nada de produccion imposible.
+7. ESPANOL NEUTRO, hablado, directo. Como se lo dirias a un amigo, no a un cliente.
+"""
+
+
+HOOKS_OUTPUT_SPEC = """FORMATO DE SALIDA (respetalo exactamente, sin nada antes ni despues de la lista):
+
+**1.** "la frase exacta que se dice en voz alta"
+📹 lo que se ve en pantalla mientras la dices
+🎯 angulo
+
+**2.** "..."
+📹 ...
+🎯 ...
+
+El angulo de cada uno debe ser uno de estos, y no se repite: dolor, demostracion, error, contraintuitivo, curiosidad, conflicto, cifra, confesion, comparacion, objecion.
+Nada de introduccion. Nada de cierre. Nada de explicaciones. Solo la lista."""
+
+
+def build_account_context(metrics: Optional[Dict[str, Any]]) -> str:
+    """
+    Convierte las metricas del analisis en un contexto corto para calibrar lo
+    que la IA propone. Sin analisis previo devuelve cadena vacia y la IA
+    trabaja a ciegas, como antes.
+    """
+    if not metrics or not metrics.get("videos"):
+        return ""
+
+    resumen = metrics.get("resumen", {})
+    lineas = [
+        "DATOS REALES DE ESTA CUENTA (para calibrar tus propuestas; NO los menciones en tu respuesta):",
+        f"- Ultimos {resumen.get('n', 0)} videos: {resumen.get('views_promedio', 0)} vistas promedio "
+        f"(mediana {resumen.get('views_mediana', 0)}, mejor {resumen.get('views_max', 0)}).",
+        f"- Engagement promedio: {resumen.get('engagement_promedio', 0)}%. "
+        f"Duracion promedio actual: {resumen.get('duracion_promedio', 0)}s.",
+    ]
+
+    por_duracion = metrics.get("por_duracion") or {}
+    if por_duracion:
+        mejor = max(por_duracion.items(), key=lambda kv: kv[1]["views_promedio"])
+        lineas.append(f"- Rango de duracion con mas vistas hasta ahora: {mejor[0]}.")
+
+    if resumen.get("comment_rate_promedio", 0) == 0:
+        lineas.append("- La cuenta NO esta generando comentarios: prioriza ganchos que obliguen a responder.")
+
+    titulos = [v["title"] for v in metrics["videos"][:5] if v.get("title")]
+    if titulos:
+        lineas.append("- Asi abren sus videos actuales (NO repitas este tono ni estas formulas): "
+                      + " / ".join(t[:45] for t in titulos))
+
+    return "\n".join(lineas)
+
+
+def build_hooks_prompt(input_data: Dict[str, Any], n: int = 10, account_context: str = "") -> str:
+    """Prompt del modo ganchos: tema de entrada + contexto de la cuenta."""
+    tema = (input_data.get("title") or input_data.get("user_idea") or "").strip()
+    descripcion = (input_data.get("description") or "").strip()
+    url = (input_data.get("url") or "").strip()
+
+    partes = [f"Dame {n} ganchos distintos para los primeros 3 segundos de un video sobre:", f"TEMA: {tema}"]
+    if descripcion and descripcion != tema:
+        partes.append(f"CONTEXTO: {descripcion}")
+    if url:
+        partes.append(f"VIDEO DE REFERENCIA: {url}")
+    if account_context:
+        partes.append("")
+        partes.append(account_context)
+    partes.append("")
+    partes.append(HOOKS_OUTPUT_SPEC)
+
+    return "\n".join(partes)
+
+
+def generate_hooks(
+    input_data: Dict[str, Any],
+    n: int = 10,
+    account_context: str = "",
+    config: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """Devuelve N aperturas para los primeros 3 segundos. Nada mas."""
+    prompt = build_hooks_prompt(input_data, n=n, account_context=account_context)
+    return run_ai_task(prompt, HOOKS_SYSTEM_PROMPT, config=config)
