@@ -2,6 +2,15 @@
 
 Todos los cambios notables realizados en este proyecto se registrarán en este archivo.
 
+## [2.9.3] - 2026-10-14
+### 🐛 Corregido
+- **Google retiró las familias 2.5 para claves nuevas y la IA seguía sin responder:** El catálogo que devuelve la clave incluye `gemini-2.5-flash` y `gemini-2.5-pro`, pero al llamarlos responden `404 "no longer available to new users"`. Se reordenó la preferencia para que las familias 3.x vayan primero (`gemini-3.8-flash`, `gemini-3-flash-preview`, `gemini-flash-latest`) y las 2.5 queden de último recurso.
+- **Se gastaban intentos en modelos que no generan texto:** el catálogo trae también `gemini-2.5-flash-preview-tts` (voz) y `gemini-2.5-flash-image`, que devuelven `400` ante una petición de texto. Ahora se filtran por nombre (`tts`, `image`, `embedding`, `vision`, `audio`, `live`, `aqa`).
+- **El reemplazo que indica Google ahora se aprovecha:** cuando un modelo se retira, el propio 404 dice cuál lo sustituye ("Please update your code to use models/gemini-3.8-flash"). `_modelos_sugeridos()` extrae ese nombre y lo encola como siguiente intento, así la próxima retirada de modelos no vuelve a tumbar la función.
+- **Sobrecarga temporal diferenciada:** un `503` ("high demand") ya no se confunde con un modelo inexistente; se pasa al siguiente candidato y, si fallan todos, el mensaje dice que se reintente en un minuto.
+
+---
+
 ## [2.9.2] - 2026-10-13
 ### 🐛 Corregido
 - **Todas las funciones de IA caían con `404 model not found`:** La lista de modelos estaba fija en el código (`gemini-2.5-flash`, `gemini-1.5-flash`) y Google retiró el segundo. El 404 además demuestra que la clave autenticaba bien: nunca fue un problema de credenciales. Ahora `listar_modelos_gemini()` le pregunta a la clave qué modelos soportan `generateContent` (en `v1beta` y si no en `v1`), cachea la respuesta y los ordena por preferencia, quedándose con un `flash` si los preferidos no están. Sin catálogo disponible intenta a ciegas como antes.

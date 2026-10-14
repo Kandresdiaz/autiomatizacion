@@ -1,4 +1,5 @@
 ﻿import os
+import re
 import json
 import datetime
 import requests
@@ -145,25 +146,49 @@ Presenta una tabla clara con las siguientes columnas:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com"
 
-# Orden de preferencia. No es una lista cerrada: solo decide cual elegir entre
-# los modelos que la clave REALMENTE tiene, que se consultan en caliente.
+# Orden de preferencia entre los modelos que la clave REALMENTE tiene. Las
+# familias 2.5 ya no se sirven a claves nuevas (404 "no longer available to new
+# users"), asi que las 3.x van primero y las 2.5 quedan de ultimo recurso.
 GEMINI_MODELOS_PREFERIDOS = [
-    "gemini-2.5-flash",
+    "gemini-3.8-flash",
+    "gemini-3-flash-preview",
     "gemini-flash-latest",
-    "gemini-2.0-flash",
-    "gemini-2.5-pro",
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
 ]
 
-# Cache por proceso: la lista de modelos no cambia entre llamadas.
+# El catalogo de la clave incluye modelos que NO generan texto: voz (tts),
+# imagen, embeddings. Pedirles texto devuelve 400 y gasta un intento.
+GEMINI_NO_TEXTO = ("tts", "image", "embedding", "aqa", "vision", "audio", "live")
+
+# Cache por proceso: el catalogo no cambia entre llamadas.
 _GEMINI_MODELOS_CACHE: Dict[str, List[Tuple[str, str]]] = {}
+
+
+def _sirve_para_texto(modelo: str) -> bool:
+    return not any(marca in modelo for marca in GEMINI_NO_TEXTO)
+
+
+def _modelos_sugeridos(texto_error: str, modelo_fallido: str) -> List[str]:
+    """
+    Cuando Google retira un modelo, el propio 404 dice cual lo reemplaza
+    ("Please update your code to use models/gemini-3.8-flash"). Se aprovecha
+    esa pista en vez de adivinar.
+    """
+    sugeridos = []
+    for nombre in re.findall(r"models/([A-Za-z0-9.\-_]+)", texto_error or ""):
+        if nombre != modelo_fallido and _sirve_para_texto(nombre) and nombre not in sugeridos:
+            sugeridos.append(nombre)
+    return sugeridos
 
 
 def listar_modelos_gemini(api_key: str) -> List[Tuple[str, str]]:
     """
     Modelos que esta clave puede usar con generateContent, como (version, modelo).
 
-    Los nombres de modelo de Google caducan (gemini-1.5-flash fue retirado) y no
-    todas las claves ven el mismo catalogo, asi que se pregunta en vez de asumir.
+    Los nombres de Google caducan y no todas las claves ven el mismo catalogo,
+    asi que se pregunta en vez de asumir.
     """
     if api_key in _GEMINI_MODELOS_CACHE:
         return _GEMINI_MODELOS_CACHE[api_key]
@@ -185,8 +210,11 @@ def listar_modelos_gemini(api_key: str) -> List[Tuple[str, str]]:
         except ValueError:
             continue
         for m in datos.get("models", []):
-            if "generateContent" in (m.get("supportedGenerationMethods") or []):
-                encontrados.append((version, str(m.get("name", "")).replace("models/", "")))
+            if "generateContent" not in (m.get("supportedGenerationMethods") or []):
+                continue
+            modelo = str(m.get("name", "")).replace("models/", "")
+            if _sirve_para_texto(modelo):
+                encontrados.append((version, modelo))
         if encontrados:
             break
 
@@ -205,32 +233,40 @@ def listar_modelos_gemini(api_key: str) -> List[Tuple[str, str]]:
 
 def call_gemini(api_key: str, prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
     """
-    Llama a Gemini usando un modelo que la clave tenga disponible de verdad.
+    Llama a Gemini probando los modelos que la clave tiene disponibles.
 
-    Antes la lista de modelos estaba fija en el codigo y cuando Google retiro
-    gemini-1.5-flash la funcion fallaba entera. Ademas cada intento pisaba el
-    error del anterior, asi que el mensaje final no decia la causa real.
+    Si un modelo responde 404 porque fue retirado, Google indica el reemplazo en
+    el propio mensaje; ese reemplazo se encola como siguiente intento. Asi la
+    proxima retirada de modelos no vuelve a tumbar la funcion.
     """
     payload = {
         "contents": [{"parts": [{"text": f"{system_prompt}\n\n{prompt}"}]}],
         # El diagnostico del asesor son 6 secciones con tablas y los ganchos son
-        # 10 bloques: 2048 se quedaba corto. Ademas los modelos 2.5 gastan parte
-        # del presupuesto de salida razonando, y al agotarlo devuelven texto vacio.
+        # 10 bloques: 2048 se quedaba corto. Ademas los modelos nuevos gastan
+        # parte del presupuesto de salida razonando.
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192},
     }
     headers = {"Content-Type": "application/json"}
 
-    candidatos = listar_modelos_gemini(api_key)
-    if not candidatos:
-        # Sin catalogo (clave sin permiso de listar, red caida): se intenta a ciegas.
-        candidatos = [("v1beta", m) for m in GEMINI_MODELOS_PREFERIDOS]
+    pendientes = list(listar_modelos_gemini(api_key))
+    if not pendientes:
+        # Sin catalogo (clave sin permiso de listar, red caida): a ciegas.
+        pendientes = [("v1beta", m) for m in GEMINI_MODELOS_PREFERIDOS]
 
     errores: List[str] = []
-    for version, model in candidatos[:4]:
+    intentados: set = set()
+    sobrecargado = False
+
+    while pendientes and len(intentados) < 6:
+        version, model = pendientes.pop(0)
+        if model in intentados:
+            continue
+        intentados.add(model)
+
         url = f"{GEMINI_API_BASE}/{version}/models/{model}:generateContent"
         try:
             resp = requests.post(url, params={"key": api_key}, headers=headers,
-                                 json=payload, timeout=45)
+                                 json=payload, timeout=60)
         except Exception as e:
             errores.append(f"{model}: {type(e).__name__}: {e}")
             continue
@@ -243,20 +279,31 @@ def call_gemini(api_key: str, prompt: str, system_prompt: str = SYSTEM_PROMPT) -
                 continue
             if candidates:
                 parts = candidates[0].get("content", {}).get("parts", [])
-                if parts and parts[0].get("text"):
-                    return parts[0]["text"]
-                motivo = candidates[0].get("finishReason", "sin texto en la respuesta")
+                texto = "".join(p.get("text", "") for p in parts)
+                if texto.strip():
+                    return texto
+                motivo = candidates[0].get("finishReason", "sin texto")
                 errores.append(f"{model}: respuesta vacia ({motivo})")
                 continue
             errores.append(f"{model}: la API no devolvio candidatos")
             continue
 
-        errores.append(f"{model}: HTTP {resp.status_code} {resp.text[:200]}")
+        cuerpo = resp.text[:200]
+        errores.append(f"{model}: HTTP {resp.status_code} {cuerpo}")
+        if resp.status_code == 503:
+            sobrecargado = True
+        if resp.status_code == 404:
+            # Google nombra el reemplazo en el error: probarlo a continuacion.
+            for sugerido in _modelos_sugeridos(resp.text, model):
+                if sugerido not in intentados:
+                    pendientes.insert(0, (version, sugerido))
 
-    disponibles = ", ".join(m for _v, m in candidatos[:8]) or "ninguno (no se pudo listar)"
+    pista = ""
+    if sobrecargado:
+        pista = " Alguno respondio 503 (demanda alta, temporal): reintenta en un minuto."
+
     raise RuntimeError(
-        "Fallo al contactar Gemini. Intentos: " + " | ".join(errores)
-        + f". Modelos disponibles para tu clave: {disponibles}"
+        "Fallo al contactar Gemini. Intentos: " + " | ".join(errores) + "." + pista
     )
 
 def call_openai_compatible(api_key: str, prompt: str, base_url: str, model: str,
