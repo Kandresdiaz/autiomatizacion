@@ -1,4 +1,5 @@
 ﻿import os
+import re
 import json
 import datetime
 import requests
@@ -74,6 +75,168 @@ def save_ai_key_to_env(provider_key_name: str, key_value: str) -> bool:
     return True
 
 # ==============================================================================
+# PERFIL DEL CREADOR: NICHO, OFERTA, TAMANO DE CUENTA Y CAPACIDAD DE PRODUCCION
+# ==============================================================================
+# Sin esto la IA aconseja a un creador promedio: cadencia de manual ("publica 1
+# video diario"), ganchos que servirian para cualquier nicho y monetizacion de
+# cuenta grande (marcas, fondo de creadores). El perfil la obliga a aconsejar a
+# ESTE creador: su nicho, lo que construye, cuantos videos puede grabar de
+# verdad y los seguidores que tiene hoy.
+
+MODOS_PRODUCCION = {
+    "volumen": (
+        "VOLUMEN / APRENDIZAJE RAPIDO. Prioriza cantidad de intentos sobre pulido: cada video es un test "
+        "para descubrir que tema y que formato enganchan. Produccion en lotes (varios videos en una sola "
+        "sentada), edicion minima, se asume que la mayoria va a fracasar y eso no es un problema. El avance "
+        "se mide por numero de tests publicados y por cuantos superan la mediana de vistas, no por la "
+        "calidad de cada pieza suelta."
+    ),
+    "sostenible": (
+        "SOSTENIBLE. Cadencia constante que el creador puede mantener semanas sin quemarse: se repite el "
+        "formato que ya funciono y se testea una sola variable nueva por semana."
+    ),
+    "quirurgico": (
+        "QUIRURGICO. Pocos videos, muy trabajados. Cada pieza apuesta a un tema ya validado por los datos; "
+        "no se gastan slots en explorar a ciegas."
+    ),
+}
+
+# De donde sale el dinero. No es un detalle de la pestana de monetizacion: cambia
+# que es "vender" para el analisis, para la semana y para los ganchos. Si el
+# creador vive de sus apps, el contenido es distribucion, no un escaparate de
+# servicios.
+MODELOS_NEGOCIO = {
+    "apps_propias": (
+        "PRODUCTO PROPIO. El negocio son SUS APPS: de ahi sale el dinero. El contenido no es la fuente de "
+        "ingresos, es el canal de distribucion que lleva gente a usarlas. Queda PROHIBIDO proponerle vender "
+        "servicios, freelance, consultoria, cursos, mentorias, plantillas o acuerdos con marcas como via "
+        "principal. Si crees que necesita caja puente para sostenerse mientras el producto crece, lo dices en "
+        "UNA linea marcada como 'no es el objetivo' y sigues trabajando el producto."
+    ),
+    "servicios": (
+        "SERVICIOS. Vende su tiempo y su trabajo a medida (automatizaciones, desarrollo, consultoria). El "
+        "contenido tiene que traer conversaciones con clientes potenciales."
+    ),
+    "mixto": (
+        "MIXTO. Las apps son el objetivo real y los servicios son solo la caja de corto plazo. Prioriza "
+        "siempre lo que acerque usuarios a las apps; los servicios aparecen unicamente como lo que financia "
+        "el camino, nunca como el plan."
+    ),
+}
+
+ETAPAS_CUENTA = [
+    (0, 1000, "ARRANQUE (menos de 1.000 seguidores)",
+     "Las vistas NO vienen de los seguidores, vienen del 'Para ti'. Queda PROHIBIDO aconsejar tacticas que "
+     "necesitan una audiencia que todavia no existe: pedirle a los seguidores que comenten, lives, encuestas "
+     "a la comunidad, colaboraciones con cuentas grandes, acuerdos con marcas o el fondo de creadores. En "
+     "esta etapa el unico trabajo es encontrar el tema y el formato que el algoritmo empuja a desconocidos."),
+    (1000, 10000, "TRACCION (1.000 a 10.000 seguidores)",
+     "Ya hay audiencia minima: se puede serializar un formato y pedir una accion concreta, pero el grueso de "
+     "las vistas sigue dependiendo del 'Para ti', no de los seguidores."),
+    (10000, 10 ** 12, "ESCALA (mas de 10.000 seguidores)",
+     "La audiencia propia ya mueve vistas por si sola: tiene sentido serializar, construir comunidad y "
+     "monetizar por volumen."),
+]
+
+
+def _etapa_cuenta(followers: Optional[int]) -> Tuple[str, str]:
+    """Etapa de la cuenta y que consejos SI aplican a ese tamano."""
+    try:
+        n = int(followers or 0)
+    except (TypeError, ValueError):
+        n = 0
+    for minimo, maximo, etiqueta, regla in ETAPAS_CUENTA:
+        if minimo <= n < maximo:
+            return etiqueta, regla
+    return ETAPAS_CUENTA[-1][2], ETAPAS_CUENTA[-1][3]
+
+
+DEFAULT_CREATOR_PROFILE: Dict[str, Any] = {
+    "nicho": "",
+    "publico": "",
+    "oferta": "",
+    "herramientas": "",
+    "followers": 0,
+    "videos_por_semana": 7,
+    "modo": "sostenible",
+    "modelo_negocio": "apps_propias",
+}
+
+
+def normalize_creator_profile(profile: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Completa el perfil con los valores por defecto y normaliza los tipos."""
+    datos = dict(DEFAULT_CREATOR_PROFILE)
+    for clave, valor in (profile or {}).items():
+        if clave in datos:
+            datos[clave] = valor
+
+    try:
+        datos["followers"] = max(int(datos.get("followers") or 0), 0)
+    except (TypeError, ValueError):
+        datos["followers"] = 0
+
+    try:
+        datos["videos_por_semana"] = min(max(int(datos.get("videos_por_semana") or 1), 1), 70)
+    except (TypeError, ValueError):
+        datos["videos_por_semana"] = 7
+
+    if datos.get("modo") not in MODOS_PRODUCCION:
+        datos["modo"] = "sostenible"
+
+    if datos.get("modelo_negocio") not in MODELOS_NEGOCIO:
+        datos["modelo_negocio"] = "apps_propias"
+
+    for clave in ("nicho", "publico", "oferta", "herramientas"):
+        datos[clave] = str(datos.get(clave) or "").strip()
+
+    return datos
+
+
+def build_creator_profile_block(profile: Optional[Dict[str, Any]]) -> str:
+    """
+    Bloque de perfil que se inyecta en todos los prompts. Fija el nicho, el
+    tamano real de la cuenta y la CADENCIA que el creador declaro poder sostener,
+    para que la IA no invente una frecuencia de publicacion de manual.
+    """
+    datos = normalize_creator_profile(profile)
+    declarado = bool(datos["nicho"] or datos["publico"] or datos["oferta"] or datos["followers"])
+
+    etapa, regla_etapa = _etapa_cuenta(datos["followers"])
+    por_semana = datos["videos_por_semana"]
+    al_dia = round(por_semana / 7, 1)
+
+    lineas = ["PERFIL DEL CREADOR (es obligatorio ajustar TODO el consejo a esto):"]
+
+    if declarado:
+        lineas += [
+            f"- Nicho / de que habla: {datos['nicho'] or 'no declarado'}",
+            f"- A quien le habla: {datos['publico'] or 'no declarado'}",
+            f"- Que ofrece o quiere monetizar: {datos['oferta'] or 'no declarado'}",
+        ]
+        if datos["herramientas"]:
+            lineas.append(
+                f"- Herramientas / stack que usa y puede mostrar en pantalla: {datos['herramientas']}"
+            )
+        lineas.append(f"- Seguidores hoy: {datos['followers']} -> ETAPA {etapa}. {regla_etapa}")
+    else:
+        lineas.append("- El creador no declaro nicho ni oferta: no te lo inventes. Trabaja con el tema que "
+                      "te den y marca en una linea que dato falta para afinar el consejo.")
+
+    lineas += [
+        f"- CAPACIDAD DE PRODUCCION DECLARADA: {por_semana} video(s) por semana ({al_dia} al dia en promedio).",
+        f"- MODO DE TRABAJO ELEGIDO: {MODOS_PRODUCCION[datos['modo']]}",
+        f"- DE DONDE SALE EL DINERO: {MODELOS_NEGOCIO[datos['modelo_negocio']]}",
+        "",
+        f"REGLA DE CADENCIA: todo plan que entregues se reparte exactamente en esos {por_semana} slots de la "
+        "semana. Queda PROHIBIDO recomendar una frecuencia distinta a la declarada (nada de 'publica 1 video "
+        "diario', 'sube 3 veces por semana' o 'se constante') y PROHIBIDO pedirle que publique mas o menos de "
+        "lo que declaro. Si el volumen te parece insuficiente o excesivo para su objetivo, dilo en UNA linea "
+        "con el numero que faltaria y despues planifica con el volumen declarado.",
+    ]
+    return "\n".join(lineas)
+
+
+# ==============================================================================
 # PROMPT ENGINE: REGLAS ESTRICTAS ANTI-CLICHE Y MICROGANCHOS
 # ==============================================================================
 
@@ -93,7 +256,7 @@ REGLAS DE ORO OBLIGATORIAS (PROHIBIDO EL CONTENIDO GENERICO / 'HABLAR TONTERIAS'
 """
 
 def build_user_prompt(input_data: Dict[str, Any], style: str = "disruptive", target_duration: int = 30,
-                      account_context: str = "") -> str:
+                      account_context: str = "", profile: Optional[Dict[str, Any]] = None) -> str:
     title = input_data.get("title", "")
     description = input_data.get("description", "")
     url = input_data.get("url", "")
@@ -115,6 +278,8 @@ INFORMACION DE ENTRADA / INSPIRACION:
 - Titulo/Idea original: {title or user_idea}
 - Contexto o descripcion: {description or 'N/A'}
 {f'- Link del video de referencia: {url}' if url else ''}
+
+{build_creator_profile_block(profile)}
 
 {account_context}
 
@@ -145,25 +310,49 @@ Presenta una tabla clara con las siguientes columnas:
 
 GEMINI_API_BASE = "https://generativelanguage.googleapis.com"
 
-# Orden de preferencia. No es una lista cerrada: solo decide cual elegir entre
-# los modelos que la clave REALMENTE tiene, que se consultan en caliente.
+# Orden de preferencia entre los modelos que la clave REALMENTE tiene. Las
+# familias 2.5 ya no se sirven a claves nuevas (404 "no longer available to new
+# users"), asi que las 3.x van primero y las 2.5 quedan de ultimo recurso.
 GEMINI_MODELOS_PREFERIDOS = [
-    "gemini-2.5-flash",
+    "gemini-3.8-flash",
+    "gemini-3-flash-preview",
     "gemini-flash-latest",
-    "gemini-2.0-flash",
-    "gemini-2.5-pro",
+    "gemini-flash-lite-latest",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
 ]
 
-# Cache por proceso: la lista de modelos no cambia entre llamadas.
+# El catalogo de la clave incluye modelos que NO generan texto: voz (tts),
+# imagen, embeddings. Pedirles texto devuelve 400 y gasta un intento.
+GEMINI_NO_TEXTO = ("tts", "image", "embedding", "aqa", "vision", "audio", "live")
+
+# Cache por proceso: el catalogo no cambia entre llamadas.
 _GEMINI_MODELOS_CACHE: Dict[str, List[Tuple[str, str]]] = {}
+
+
+def _sirve_para_texto(modelo: str) -> bool:
+    return not any(marca in modelo for marca in GEMINI_NO_TEXTO)
+
+
+def _modelos_sugeridos(texto_error: str, modelo_fallido: str) -> List[str]:
+    """
+    Cuando Google retira un modelo, el propio 404 dice cual lo reemplaza
+    ("Please update your code to use models/gemini-3.8-flash"). Se aprovecha
+    esa pista en vez de adivinar.
+    """
+    sugeridos = []
+    for nombre in re.findall(r"models/([A-Za-z0-9.\-_]+)", texto_error or ""):
+        if nombre != modelo_fallido and _sirve_para_texto(nombre) and nombre not in sugeridos:
+            sugeridos.append(nombre)
+    return sugeridos
 
 
 def listar_modelos_gemini(api_key: str) -> List[Tuple[str, str]]:
     """
     Modelos que esta clave puede usar con generateContent, como (version, modelo).
 
-    Los nombres de modelo de Google caducan (gemini-1.5-flash fue retirado) y no
-    todas las claves ven el mismo catalogo, asi que se pregunta en vez de asumir.
+    Los nombres de Google caducan y no todas las claves ven el mismo catalogo,
+    asi que se pregunta en vez de asumir.
     """
     if api_key in _GEMINI_MODELOS_CACHE:
         return _GEMINI_MODELOS_CACHE[api_key]
@@ -185,8 +374,11 @@ def listar_modelos_gemini(api_key: str) -> List[Tuple[str, str]]:
         except ValueError:
             continue
         for m in datos.get("models", []):
-            if "generateContent" in (m.get("supportedGenerationMethods") or []):
-                encontrados.append((version, str(m.get("name", "")).replace("models/", "")))
+            if "generateContent" not in (m.get("supportedGenerationMethods") or []):
+                continue
+            modelo = str(m.get("name", "")).replace("models/", "")
+            if _sirve_para_texto(modelo):
+                encontrados.append((version, modelo))
         if encontrados:
             break
 
@@ -205,32 +397,40 @@ def listar_modelos_gemini(api_key: str) -> List[Tuple[str, str]]:
 
 def call_gemini(api_key: str, prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
     """
-    Llama a Gemini usando un modelo que la clave tenga disponible de verdad.
+    Llama a Gemini probando los modelos que la clave tiene disponibles.
 
-    Antes la lista de modelos estaba fija en el codigo y cuando Google retiro
-    gemini-1.5-flash la funcion fallaba entera. Ademas cada intento pisaba el
-    error del anterior, asi que el mensaje final no decia la causa real.
+    Si un modelo responde 404 porque fue retirado, Google indica el reemplazo en
+    el propio mensaje; ese reemplazo se encola como siguiente intento. Asi la
+    proxima retirada de modelos no vuelve a tumbar la funcion.
     """
     payload = {
         "contents": [{"parts": [{"text": f"{system_prompt}\n\n{prompt}"}]}],
         # El diagnostico del asesor son 6 secciones con tablas y los ganchos son
-        # 10 bloques: 2048 se quedaba corto. Ademas los modelos 2.5 gastan parte
-        # del presupuesto de salida razonando, y al agotarlo devuelven texto vacio.
+        # 10 bloques: 2048 se quedaba corto. Ademas los modelos nuevos gastan
+        # parte del presupuesto de salida razonando.
         "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8192},
     }
     headers = {"Content-Type": "application/json"}
 
-    candidatos = listar_modelos_gemini(api_key)
-    if not candidatos:
-        # Sin catalogo (clave sin permiso de listar, red caida): se intenta a ciegas.
-        candidatos = [("v1beta", m) for m in GEMINI_MODELOS_PREFERIDOS]
+    pendientes = list(listar_modelos_gemini(api_key))
+    if not pendientes:
+        # Sin catalogo (clave sin permiso de listar, red caida): a ciegas.
+        pendientes = [("v1beta", m) for m in GEMINI_MODELOS_PREFERIDOS]
 
     errores: List[str] = []
-    for version, model in candidatos[:4]:
+    intentados: set = set()
+    sobrecargado = False
+
+    while pendientes and len(intentados) < 6:
+        version, model = pendientes.pop(0)
+        if model in intentados:
+            continue
+        intentados.add(model)
+
         url = f"{GEMINI_API_BASE}/{version}/models/{model}:generateContent"
         try:
             resp = requests.post(url, params={"key": api_key}, headers=headers,
-                                 json=payload, timeout=45)
+                                 json=payload, timeout=60)
         except Exception as e:
             errores.append(f"{model}: {type(e).__name__}: {e}")
             continue
@@ -243,20 +443,31 @@ def call_gemini(api_key: str, prompt: str, system_prompt: str = SYSTEM_PROMPT) -
                 continue
             if candidates:
                 parts = candidates[0].get("content", {}).get("parts", [])
-                if parts and parts[0].get("text"):
-                    return parts[0]["text"]
-                motivo = candidates[0].get("finishReason", "sin texto en la respuesta")
+                texto = "".join(p.get("text", "") for p in parts)
+                if texto.strip():
+                    return texto
+                motivo = candidates[0].get("finishReason", "sin texto")
                 errores.append(f"{model}: respuesta vacia ({motivo})")
                 continue
             errores.append(f"{model}: la API no devolvio candidatos")
             continue
 
-        errores.append(f"{model}: HTTP {resp.status_code} {resp.text[:200]}")
+        cuerpo = resp.text[:200]
+        errores.append(f"{model}: HTTP {resp.status_code} {cuerpo}")
+        if resp.status_code == 503:
+            sobrecargado = True
+        if resp.status_code == 404:
+            # Google nombra el reemplazo en el error: probarlo a continuacion.
+            for sugerido in _modelos_sugeridos(resp.text, model):
+                if sugerido not in intentados:
+                    pendientes.insert(0, (version, sugerido))
 
-    disponibles = ", ".join(m for _v, m in candidatos[:8]) or "ninguno (no se pudo listar)"
+    pista = ""
+    if sobrecargado:
+        pista = " Alguno respondio 503 (demanda alta, temporal): reintenta en un minuto."
+
     raise RuntimeError(
-        "Fallo al contactar Gemini. Intentos: " + " | ".join(errores)
-        + f". Modelos disponibles para tu clave: {disponibles}"
+        "Fallo al contactar Gemini. Intentos: " + " | ".join(errores) + "." + pista
     )
 
 def call_openai_compatible(api_key: str, prompt: str, base_url: str, model: str,
@@ -335,6 +546,7 @@ def generate_video_script(
     style: str = "disruptive",
     target_duration: int = 30,
     account_context: str = "",
+    profile: Optional[Dict[str, Any]] = None,
     config: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """
@@ -343,7 +555,7 @@ def generate_video_script(
     reales de la cuenta en vez de escribir a ciegas.
     """
     prompt = build_user_prompt(input_data, style=style, target_duration=target_duration,
-                               account_context=account_context)
+                               account_context=account_context, profile=profile)
     return run_ai_task(prompt, SYSTEM_PROMPT, config=config)
 
 # ==============================================================================
@@ -363,6 +575,10 @@ REGLAS DE ORO OBLIGATORIAS:
 4. NO INVENTES METRICAS: solo existen las que te entregan. Si para concluir algo necesitas retencion por segundo, seguidores ganados o fuente de trafico, dilo explicitamente y di donde se ve (TikTok Studio > Analiticas).
 5. MUESTRA PEQUENA = HIPOTESIS: si hay menos de 5 videos con datos o las vistas son muy bajas, avisalo en la primera linea y presenta las conclusiones como hipotesis a testear, no como verdades.
 6. TONO: espanol neutro, directo, crudo, sin relleno corporativo. Prioriza tablas y listas accionables sobre parrafos.
+7. RESPETA LA CADENCIA DECLARADA: el perfil del creador trae cuantos videos por semana puede publicar de verdad y en que modo (volumen, sostenible o quirurgico). Todo plan se reparte en esos slots. Prohibido inventar una frecuencia ('publica 1 video diario') y prohibido poner 'se constante' o 'publica mas seguido' como accion.
+8. AJUSTA AL TAMANO DE LA CUENTA: el perfil trae la etapa (arranque, traccion, escala) y que tacticas aplican a ese tamano. En arranque las vistas no vienen de los seguidores: prohibido proponer acciones que necesiten audiencia (pedir comentarios a los seguidores, lives, colaboraciones, marcas, fondo de creadores).
+9. EN MODO VOLUMEN NO BUSQUES EL VIDEO PERFECTO: si el creador eligio volumen, el objetivo es cerrar la mayor cantidad de tests posibles y leer cual hipotesis gano. Cada idea que propongas dice QUE VARIABLE TESTEA (tema, formato, duracion, gancho) para que al final de la semana se pueda descartar con datos.
+10. MONETIZACION SOLO LA DE SU ETAPA: si el creador quiere ganar dinero, parte de lo que YA ofrece (su producto, su app, su servicio) y habla en numeros absolutos de personas, no en porcentajes de conversion sobre vistas que todavia no tiene.
 """
 
 
@@ -514,18 +730,22 @@ Compara los videos de arriba contra los de abajo, nombrandolos por su titulo. Qu
 ### 🧨 Lo que te esta costando vistas
 Errores concretos detectados en los datos (duracion fuera del rango que te funciona, titulos que no abren curiosidad, cero compartidos, etc.). Cada punto con su cifra.
 
-### 🛠️ 5 acciones para el proximo video
+### 🛠️ 5 acciones para los proximos videos
 Tabla de 5 filas: | Accion exacta | Por que (dato que lo justifica) | Como se mide si funciono |
+Ninguna fila puede ser sobre cadencia ni sobre constancia: cuantos videos publica ya esta fijado en el perfil.
 
-### 🎯 3 ideas listas para grabar
-Por cada idea: tema + el gancho textual del segundo 0 (la frase exacta que se dice) + duracion objetivo en segundos. Basadas en lo que ya funciono en ESTA cuenta.
+### 🎯 Ideas listas para grabar
+Una idea por cada slot de la semana que declaro el creador, con un maximo de 10 filas. Si declaro mas slots que eso, di al final cuantas veces se reutiliza cada idea cambiando solo el gancho.
+Tabla: | # | Tema concreto | Gancho del segundo 0 (frase exacta) | Dur. objetivo | Variable que testea |
+Los temas salen de lo que ya funciono en ESTA cuenta y del nicho del perfil, no de ideas genericas.
 
 ### 📈 Que medir en los proximos 7 dias
-2 o 3 numeros concretos con la meta a superar, calculada desde los promedios de arriba."""
+2 o 3 numeros concretos con la meta a superar, calculada desde los promedios de arriba. Si el creador esta en modo volumen, uno de esos numeros es cuantos de los videos publicados superaron la mediana de vistas actual."""
 
 
 def build_analysis_prompt(metrics: Dict[str, Any], account: str = "",
-                          extra_context: str = "", goal: str = "mas_vistas") -> str:
+                          extra_context: str = "", goal: str = "mas_vistas",
+                          profile: Optional[Dict[str, Any]] = None) -> str:
     """Arma el reporte de datos que recibe la IA: cifras, sin adjetivos."""
     resumen = metrics.get("resumen", {})
     filas = metrics.get("videos", [])
@@ -534,12 +754,16 @@ def build_analysis_prompt(metrics: Dict[str, Any], account: str = "",
         "mas_vistas": "ALCANCE. Quiere que mas gente nueva vea los videos (vistas).",
         "mas_interaccion": "CONVERSION. Quiere mas comentarios, guardados y compartidos por vista.",
         "mas_seguidores": "SEGUIDORES. Quiere convertir espectadores sueltos en seguidores de la cuenta.",
-        "vender": "VENTA. Quiere que el contenido traiga interesados reales en lo que ofrece.",
+        "vender": ("DISTRIBUCION. Quiere que el contenido traiga usuarios o clientes reales a lo que ofrece. "
+                   "Mira 'DE DONDE SALE EL DINERO' en el perfil: si vive de sus apps, el objetivo son usuarios "
+                   "de la app, no clientes de servicios."),
     }.get(goal, "ALCANCE. Quiere mas vistas.")
 
     lineas = [
         f"CUENTA ANALIZADA: {account or 'cuenta de TikTok del creador'}",
         f"OBJETIVO DEL CREADOR: {objetivo}",
+        "",
+        build_creator_profile_block(profile),
         "",
         f"RESUMEN DE LOS ULTIMOS {resumen.get('n', 0)} VIDEOS CON DATOS:",
         f"- Vistas totales: {resumen.get('views_total', 0)}",
@@ -591,6 +815,7 @@ def analyze_account_performance(
     account: str = "",
     extra_context: str = "",
     goal: str = "mas_vistas",
+    profile: Optional[Dict[str, Any]] = None,
     config: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """
@@ -610,7 +835,8 @@ def analyze_account_performance(
             "metrics": metrics,
         }
 
-    prompt = build_analysis_prompt(metrics, account=account, extra_context=extra_context, goal=goal)
+    prompt = build_analysis_prompt(metrics, account=account, extra_context=extra_context,
+                                   goal=goal, profile=profile)
     resultado = run_ai_task(prompt, ANALYST_SYSTEM_PROMPT, config=config)
     resultado["metrics"] = metrics
     return resultado
@@ -629,6 +855,11 @@ REGLAS DE ORO OBLIGATORIAS:
 5. UN ANGULO DISTINTO POR GANCHO: no entregues 10 variaciones de la misma idea.
 6. GRABABLE: el visual tiene que poder hacerse con un celular, una grabacion de pantalla o lo que el creador ya tiene a mano. Nada de produccion imposible.
 7. ESPANOL NEUTRO, hablado, directo. Como se lo dirias a un amigo, no a un cliente.
+8. OBLIGATORIO SER CONCRETO: cada gancho nombra algo que se puede ver, oir o medir (el error exacto, el nombre real de la herramienta, la cifra, el archivo, la pantalla, el resultado, el tiempo que tardo). Prohibidos los sustantivos abstractos de coaching: 'productividad', 'potencial', 'mentalidad', 'exito', 'valor', 'habilidades', 'oportunidades'.
+9. CERO GANCHOS REUSABLES: si el mismo gancho funcionaria igual para un video de cocina y para uno de codigo, esta mal y lo descartas. Tiene que ser imposible de usar fuera del tema y del publico que trae el perfil.
+10. HABLA EL IDIOMA DEL PUBLICO DEL PERFIL: usa las palabras que esa gente ya usa (el nombre real del lenguaje, del framework, del error, de la herramienta) y no expliques lo que ya saben. Si el publico es tecnico, un gancho que suene a explicacion para principiantes esta mal.
+11. SI HAY ALGO QUE MOSTRAR, SE MUESTRA: cuando el creador puede ensenar una pantalla, un resultado, un antes/despues o un objeto, el visual del segundo 0 arranca con eso ya en movimiento, no con su cara presentando.
+12. NO TODOS LOS GANCHOS SON UNA PREGUNTA: maximo 2 de los que entregues pueden ser preguntas. El resto son afirmaciones, cifras o demostraciones.
 """
 
 
@@ -680,8 +911,9 @@ def build_account_context(metrics: Optional[Dict[str, Any]]) -> str:
     return "\n".join(lineas)
 
 
-def build_hooks_prompt(input_data: Dict[str, Any], n: int = 10, account_context: str = "") -> str:
-    """Prompt del modo ganchos: tema de entrada + contexto de la cuenta."""
+def build_hooks_prompt(input_data: Dict[str, Any], n: int = 10, account_context: str = "",
+                      profile: Optional[Dict[str, Any]] = None) -> str:
+    """Prompt del modo ganchos: tema de entrada + perfil + contexto de la cuenta."""
     tema = (input_data.get("title") or input_data.get("user_idea") or "").strip()
     descripcion = (input_data.get("description") or "").strip()
     url = (input_data.get("url") or "").strip()
@@ -691,6 +923,8 @@ def build_hooks_prompt(input_data: Dict[str, Any], n: int = 10, account_context:
         partes.append(f"CONTEXTO: {descripcion}")
     if url:
         partes.append(f"VIDEO DE REFERENCIA: {url}")
+    partes.append("")
+    partes.append(build_creator_profile_block(profile))
     if account_context:
         partes.append("")
         partes.append(account_context)
@@ -704,8 +938,285 @@ def generate_hooks(
     input_data: Dict[str, Any],
     n: int = 10,
     account_context: str = "",
+    profile: Optional[Dict[str, Any]] = None,
     config: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """Devuelve N aperturas para los primeros 3 segundos. Nada mas."""
-    prompt = build_hooks_prompt(input_data, n=n, account_context=account_context)
+    prompt = build_hooks_prompt(input_data, n=n, account_context=account_context, profile=profile)
     return run_ai_task(prompt, HOOKS_SYSTEM_PROMPT, config=config)
+
+
+# ==============================================================================
+# RESUMEN DE METRICAS REUTILIZABLE (plan semanal y monetizacion)
+# ==============================================================================
+
+def build_metrics_digest(metrics: Optional[Dict[str, Any]]) -> str:
+    """
+    Version compacta de las metricas, pensada para los prompts que no son el
+    analisis completo. A diferencia de build_account_context, aqui SI se permite
+    citar las cifras en la respuesta.
+    """
+    if not metrics or not metrics.get("videos"):
+        return ("NUMEROS DE LA CUENTA: el creador todavia no corrio el analisis de rendimiento, asi que no "
+                "tienes metricas. Dilo en la primera linea, no inventes cifras y marca tus propuestas como "
+                "hipotesis a validar.")
+
+    resumen = metrics.get("resumen", {})
+    lineas = [
+        f"NUMEROS REALES DE LA CUENTA (ultimos {resumen.get('n', 0)} videos, puedes citarlos):",
+        f"- Vistas: promedio {resumen.get('views_promedio', 0)}, mediana {resumen.get('views_mediana', 0)}, "
+        f"mejor {resumen.get('views_max', 0)}, peor {resumen.get('views_min', 0)}.",
+        f"- Alcance total acumulado de esos videos: {resumen.get('views_total', 0)} vistas.",
+        f"- Engagement promedio: {resumen.get('engagement_promedio', 0)}% "
+        f"(comentarios {resumen.get('comment_rate_promedio', 0)}%, compartidos {resumen.get('share_rate_promedio', 0)}%).",
+        f"- Duracion promedio actual: {resumen.get('duracion_promedio', 0)}s.",
+    ]
+
+    def mejor_de(datos: Dict[str, Dict[str, Any]], etiqueta: str) -> None:
+        if datos:
+            clave, valor = max(datos.items(), key=lambda kv: kv[1]["views_promedio"])
+            lineas.append(f"- {etiqueta} con mas vistas promedio: {clave} ({valor['views_promedio']} vistas "
+                          f"en {valor['n']} video(s)).")
+
+    mejor_de(metrics.get("por_duracion") or {}, "Rango de duracion")
+    mejor_de(metrics.get("por_franja") or {}, "Franja horaria")
+    mejor_de(metrics.get("por_dia") or {}, "Dia de la semana")
+
+    mejores = metrics.get("mejores") or []
+    if mejores:
+        lineas.append("- Los que mas funcionaron: " + " | ".join(
+            f"\"{v['title'][:50]}\" ({v['views']} vistas, {v['duration']}s)" for v in mejores
+        ))
+
+    peores = metrics.get("peores") or []
+    if peores:
+        lineas.append("- Los que menos funcionaron: " + " | ".join(
+            f"\"{v['title'][:50]}\" ({v['views']} vistas, {v['duration']}s)" for v in peores
+        ))
+
+    return "\n".join(lineas)
+
+
+# ==============================================================================
+# ESTRUCTURA DE LA SEMANA: QUE SE GRABA EN CADA SLOT Y QUE PRUEBA
+# ==============================================================================
+
+WEEKLY_PLAN_SYSTEM_PROMPT = """Eres un director de contenido que arma parrillas semanales de video corto (TikTok, Reels, Shorts) para un solo creador.
+Tu entrega no es una lista de ideas: es un calendario cerrado donde cada slot ya tiene tema, gancho y duracion decididos, listo para grabar sin pensar mas.
+
+REGLAS DE ORO OBLIGATORIAS:
+1. UNA FILA POR SLOT, NI UNA MAS NI UNA MENOS: el reparto de la semana te lo doy ya calculado. No cambias la cantidad de videos ni los dias, y no propones una cadencia distinta.
+2. CADA SLOT ES UN VIDEO CONCRETO, NO UNA CATEGORIA: prohibido escribir 'tip del dia', 'behind the scenes', 'contenido de valor' o 'video motivacional'. Se escribe el tema exacto (que se explica, con que ejemplo, con que resultado).
+3. MAXIMO 3 PILARES: la semana entera se sostiene en 3 tipos de video como maximo, para que el creador pueda grabar en lote y para que el algoritmo entienda de que es la cuenta.
+4. CADA SLOT TESTEA UNA SOLA VARIABLE Y LA SEMANA RESPONDE UNA PREGUNTA: la pregunta se declara arriba y cada fila dice que variable mueve (tema, formato, duracion, tipo de gancho). Si dos slots testean lo mismo, estas desperdiciando uno.
+5. SE APOYA EN LO QUE YA FUNCIONO: si hay metricas, el pilar principal viene del tema, la duracion y la franja que mas vistas promedio dieron, y lo dices citando la cifra. Si no hay metricas, lo dices y reparte los pilares para explorar.
+6. GRABABLE EN LOTE Y CON LO QUE YA TIENE: agrupa los videos que se graban de una sola sentada. Nada de produccion, equipo, invitados o locaciones que el creador no declaro tener.
+7. NADA QUE NECESITE AUDIENCIA QUE NO EXISTE: respeta la etapa de la cuenta del perfil. En arranque no hay lives, ni colaboraciones, ni 'responde a tus comentarios' como slot.
+8. CERO RELLENO: no escribes introduccion, ni cierre motivacional, ni explicaciones de por que el video corto funciona. Solo el plan.
+9. ESPANOL NEUTRO, directo, en tablas.
+"""
+
+WEEKLY_PLAN_OUTPUT_SPEC = """ENTREGA TU RESPUESTA EXACTAMENTE CON ESTAS SECCIONES EN MARKDOWN:
+
+### 🎯 La pregunta que responde esta semana
+Una sola frase: que vas a saber el domingo que hoy no sabes. Mas una linea con el dato o la hipotesis de la que sale.
+
+### 🧱 Pilares de la semana (maximo 3)
+Tabla: | Pilar | Que videos entran ahi | Por que este pilar (dato o hipotesis) | Cuantos slots se lleva |
+
+### 📅 El calendario cerrado
+Tabla con EXACTAMENTE una fila por slot del reparto que te di:
+| # | Dia | Pilar | Tema concreto del video | Gancho del segundo 0 (frase exacta que se dice) | Dur. | Que se ve en pantalla | Variable que testea |
+
+### 🎥 Plan de grabacion en lote
+Que dias se graba y que slots salen de cada sesion, con el tiempo estimado de cada sesion. Agrupa por lo que comparte montaje (misma pantalla, misma ropa, mismo encuadre).
+
+### 📈 Como se lee la semana el domingo
+2 o 3 numeros con su meta, calculados desde las cifras reales de la cuenta. Y una regla de decision explicita: 'si pasa X, la semana que viene se hace Y; si no pasa, se descarta Z'.
+
+### ⛔ Lo que esta semana NO se hace
+2 o 3 cosas que el creador podria tener ganas de hacer y que esta semana estorban, con el motivo en media linea."""
+
+
+def _reparto_semanal(videos_por_semana: int) -> List[Tuple[str, int]]:
+    """
+    Reparte los videos de la semana entre los 7 dias lo mas parejo posible.
+    El calculo es local y deterministico: la IA solo rellena el contenido de
+    cada slot, no decide cuantos videos se publican ni cuando.
+    """
+    total = max(int(videos_por_semana or 1), 1)
+    base, resto = divmod(total, 7)
+
+    # Con menos de 7 videos se priorizan los dias de mayor trafico habitual.
+    orden_prioridad = [0, 2, 4, 6, 1, 3, 5]  # lunes, miercoles, viernes, domingo, martes, jueves, sabado
+    por_dia = [base] * 7
+    for i in range(resto):
+        por_dia[orden_prioridad[i]] += 1
+
+    return [(DIAS_SEMANA[i], por_dia[i]) for i in range(7) if por_dia[i] > 0]
+
+
+def build_weekly_plan_prompt(metrics: Optional[Dict[str, Any]] = None,
+                             profile: Optional[Dict[str, Any]] = None,
+                             extra_context: str = "",
+                             goal: str = "mas_vistas") -> str:
+    """Arma el prompt de la parrilla semanal con el reparto ya calculado."""
+    datos = normalize_creator_profile(profile)
+    reparto = _reparto_semanal(datos["videos_por_semana"])
+    total = sum(c for _, c in reparto)
+
+    objetivo = {
+        "mas_vistas": "ALCANCE: que mas gente nueva vea los videos.",
+        "mas_interaccion": "CONVERSION: mas comentarios, guardados y compartidos por vista.",
+        "mas_seguidores": "SEGUIDORES: convertir espectadores sueltos en seguidores.",
+        "vender": ("DISTRIBUCION: que el contenido traiga usuarios a lo que ofrece. Si vive de sus apps, "
+                   "la semana tiene que mover usuarios de la app, no pedidos de servicios."),
+    }.get(goal, "ALCANCE: mas vistas.")
+
+    partes = [
+        f"Arma la parrilla de la proxima semana para esta cuenta. OBJETIVO: {objetivo}",
+        "",
+        build_creator_profile_block(datos),
+        "",
+        f"REPARTO EXACTO DE LA SEMANA ({total} videos en total, no lo modifiques):",
+    ]
+    for dia, cantidad in reparto:
+        partes.append(f"- {dia}: {cantidad} video(s)")
+
+    partes += ["", build_metrics_digest(metrics)]
+
+    if extra_context.strip():
+        partes += ["", f"CONTEXTO QUE DA EL CREADOR: {extra_context.strip()}"]
+
+    partes += ["", WEEKLY_PLAN_OUTPUT_SPEC]
+    return "\n".join(partes)
+
+
+def generate_weekly_plan(
+    metrics: Optional[Dict[str, Any]] = None,
+    profile: Optional[Dict[str, Any]] = None,
+    extra_context: str = "",
+    goal: str = "mas_vistas",
+    config: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """
+    Convierte el perfil (y el analisis, si existe) en una semana cerrada de
+    videos: un slot por video, con tema, gancho y variable a testear.
+    """
+    prompt = build_weekly_plan_prompt(metrics, profile=profile,
+                                      extra_context=extra_context, goal=goal)
+    return run_ai_task(prompt, WEEKLY_PLAN_SYSTEM_PROMPT, config=config)
+
+
+# ==============================================================================
+# DE LAS REDES AL PRODUCTO: CUANTA GENTE HACE FALTA PARA VIVIR DE LAS APPS
+# ==============================================================================
+
+MONETIZATION_SYSTEM_PROMPT = """Eres un asesor de distribucion para creadores que construyen sus propios productos (apps, herramientas, automatizaciones) y usan el video corto como canal para conseguir usuarios.
+Tu trabajo es decirle a ESTE creador cuanta gente necesita para vivir de su producto, cuanto de eso ya alcanza con los numeros que tiene hoy, y que contenido mueve ese numero.
+
+REGLAS DE ORO OBLIGATORIAS:
+1. EL PRODUCTO ES EL NEGOCIO, EL CONTENIDO ES EL CANAL: respeta el modelo de negocio declarado en el perfil ('DE DONDE SALE EL DINERO'). Si el creador eligio vivir de sus apps, toda tu salida habla de usuarios, instalaciones, registros y suscripciones; no de clientes de servicios ni de vender su tiempo.
+2. HAZ LA CUENTA AL REVES, CON NUMEROS: parte de la meta de ingresos y del precio para sacar cuantos usuarios que pagan hacen falta; de ahi cuantos registros, de ahi cuantas vistas al mes, y de ahi cuantos videos al mes al promedio real de vistas que te doy. Si falta un dato para cerrar la cuenta (precio, tasa de registro, tasa de pago), asume un valor, dilo explicitamente, marca que es un supuesto y di donde se mide el real.
+3. RESPONDE SI DE VERDAD TIENE QUE 'HACERSE GRANDE': con las vistas de hoy calcula cuantos usuarios puede conseguir este mes sin crecer nada, y que porcentaje de la meta es eso. Si su alcance actual no alcanza, di el numero exacto de vistas mensuales que si alcanzaria y cuantos videos son a su promedio. No le dejes la idea de que primero hay que ser grande si los numeros dicen otra cosa, ni al contrario: la respuesta la dan las cifras.
+4. VISTAS NO SON USUARIOS: un video puede tener muchas vistas y traer cero instalaciones. Di que tipo de video trae usuarios, cual solo trae vistas, y como se nota la diferencia en los datos.
+5. UN SOLO PRODUCTO AL FRENTE: queda PROHIBIDO aconsejarle construir otra app. Si tiene varias, eliges UNA para empujar y dices con que criterio.
+6. CERO TACTICAS DE CUENTA GRANDE: respeta la etapa del perfil. Nada de marcas, fondo de creadores ni ingresos por vistas; si entran, solo como 'todavia no, se desbloquea en tal numero'.
+7. EL CONTENIDO NO SE VUELVE CATALOGO: si una propuesta obliga a que los videos suenen a anuncio de la app, descartala. El producto aparece porque se esta usando en pantalla resolviendo algo, no porque se promocione.
+8. NADA DE 'MARCA PERSONAL' SUELTO: si hablas de marca personal, dices exactamente que tiene que quedar demostrado en video para que alguien instale y despues pague.
+9. HONESTIDAD CON LOS NUMEROS: no prometas resultados. Si un paso del embudo no se puede saber con los datos que hay, di donde se mide (TikTok Studio, las analiticas de la app, el panel de la tienda).
+10. ESPANOL NEUTRO, directo, en tablas. Cero relleno motivacional.
+"""
+
+MONETIZATION_OUTPUT_SPEC = """ENTREGA TU RESPUESTA EXACTAMENTE CON ESTAS SECCIONES EN MARKDOWN:
+
+### 🧮 La cuenta al reves: cuanta gente necesitas
+Tabla con la cadena completa, desde la meta de ingresos hacia atras. Una fila por paso, y en cada una de donde sale el numero (dato real, supuesto tuyo o dato que falta):
+| Paso | Numero que necesitas | De donde sale ese numero |
+Filas obligatorias: ingreso mensual objetivo / usuarios que pagan / registros o instalaciones / clics al enlace / vistas al mes / videos al mes a tu promedio actual de vistas.
+
+### 📍 Donde estas hoy, sin crecer nada
+Con las vistas reales que te di: cuantos usuarios puede conseguir este mes tal como esta, y que porcentaje de la meta es. Cierra con UNA linea directa que responda si necesita 'hacerse grande' o si le falta otra cosa, con la cifra que lo sostiene.
+
+### 🧨 El paso que te rompe el embudo
+De los pasos de arriba, cual esta mas lejos de su objetivo y cual es el mas barato de mover. Que se hace esta semana para moverlo, concreto.
+
+### 📱 Que app empujar y por que
+Una sola, con el criterio por el que la eliges. Y una frase que diga que problema resuelve **como lo diria el usuario**, no como lo diria el programador.
+
+### 🎥 Que videos traen usuarios y cuales solo traen vistas
+Tabla: | Tipo de video | Que queda demostrado | Por que alguien instalaria despues de verlo | Si solo trae vistas, dilo aqui |
+
+### 🚪 El camino del video a la app
+Los pasos exactos desde que alguien ve el video hasta que usa la app: donde va el enlace, que ve al llegar, cuantos pasos hay. Di en cual se pierde mas gente y como se acorta.
+
+### 📊 Que medir (nada de metricas de vanidad)
+2 o 3 numeros con su meta a 30 dias. Ninguno puede ser seguidores ni vistas totales.
+
+### ⛔ Lo que NO deberia hacer todavia
+Di explicitamente si construir otra app, cambiar de nicho o esperar a tener mas seguidores entran aqui, cada uno con el numero que lo desbloquearia."""
+
+
+def build_monetization_prompt(metrics: Optional[Dict[str, Any]] = None,
+                              profile: Optional[Dict[str, Any]] = None,
+                              extra_context: str = "",
+                              precio: str = "",
+                              meta_mensual: str = "") -> str:
+    """
+    Arma el prompt de distribucion: perfil + producto + numeros reales. El
+    precio y la meta de ingresos son los que permiten hacer la cuenta al reves
+    (cuantos usuarios, cuantas vistas, cuantos videos).
+    """
+    datos = normalize_creator_profile(profile)
+
+    partes = [
+        "Dime cuanta gente necesita este creador para vivir de su producto, cuanto de eso ya alcanza con los "
+        "numeros que tiene HOY, y que contenido mueve ese numero.",
+        "",
+        build_creator_profile_block(datos),
+        "",
+        build_metrics_digest(metrics),
+        "",
+        "DATOS PARA HACER LA CUENTA AL REVES:",
+    ]
+
+    if precio.strip():
+        partes.append(f"- Precio / modelo de cobro del producto: {precio.strip()}")
+    else:
+        partes.append("- Precio: no declarado. Asume uno razonable para su tipo de producto, dilo claramente "
+                      "como supuesto y avisa que confirmarlo cambia toda la cuenta.")
+
+    if meta_mensual.strip():
+        partes.append(f"- Ingreso mensual que quiere alcanzar: {meta_mensual.strip()}")
+    else:
+        partes.append("- Meta de ingresos: no declarada. Usa un objetivo de referencia para 'vivir de esto', "
+                      "dilo como supuesto y haz la cuenta igual.")
+
+    if not datos["oferta"]:
+        partes += ["", "AVISO: el creador no declaro que producto tiene. Antes de hacer la cuenta, deduce 2 o "
+                       "3 productos posibles a partir de su nicho y de lo que muestra en sus videos, elige el "
+                       "mas probable para los calculos y marca que falta confirmarlo."]
+
+    if extra_context.strip():
+        partes += ["", f"CONTEXTO QUE DA EL CREADOR: {extra_context.strip()}"]
+
+    partes += ["", MONETIZATION_OUTPUT_SPEC]
+    return "\n".join(partes)
+
+
+def generate_monetization_plan(
+    metrics: Optional[Dict[str, Any]] = None,
+    profile: Optional[Dict[str, Any]] = None,
+    extra_context: str = "",
+    precio: str = "",
+    meta_mensual: str = "",
+    config: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """
+    Cuanta gente hace falta para vivir del producto y cuanto de eso ya alcanza
+    hoy. Hace la cuenta al reves (ingreso -> usuarios -> registros -> vistas ->
+    videos) para responder si de verdad hace falta "hacerse grande" primero.
+    """
+    prompt = build_monetization_prompt(metrics, profile=profile, extra_context=extra_context,
+                                       precio=precio, meta_mensual=meta_mensual)
+    return run_ai_task(prompt, MONETIZATION_SYSTEM_PROMPT, config=config)

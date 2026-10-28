@@ -36,8 +36,11 @@ from ai_assistant import (
     save_ai_key_to_env,
     generate_video_script,
     generate_hooks,
+    generate_weekly_plan,
+    generate_monetization_plan,
     build_account_context,
-    analyze_account_performance
+    analyze_account_performance,
+    normalize_creator_profile
 )
 
 st.set_page_config(
@@ -199,6 +202,31 @@ def load_active() -> dict:
 def save_active(data: dict):
     with open("active_platforms.json", "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+
+CREATOR_PROFILE_FILE = "creator_profile.json"
+
+
+def load_creator_profile() -> dict:
+    """
+    Perfil del creador: nicho, oferta, seguidores y cuantos videos puede grabar
+    de verdad. Sin esto la IA aconseja a un creador promedio (cadencia de
+    manual, ganchos genericos, monetizacion de cuenta grande).
+    """
+    if os.path.exists(CREATOR_PROFILE_FILE):
+        try:
+            with open(CREATOR_PROFILE_FILE, "r", encoding="utf-8") as f:
+                return normalize_creator_profile(json.load(f))
+        except Exception:
+            pass
+    return normalize_creator_profile(None)
+
+
+def save_creator_profile(data: dict) -> dict:
+    limpio = normalize_creator_profile(data)
+    with open(CREATOR_PROFILE_FILE, "w", encoding="utf-8") as f:
+        json.dump(limpio, f, indent=2, ensure_ascii=False)
+    return limpio
+
 
 active_platforms = load_active()
 tiktok_user = os.getenv("TIKTOK_USERNAME", "@b00kevin")
@@ -591,8 +619,126 @@ with tab3:
         # Proveedor detectado
         st.success(f"🟢 **Asistente de IA Activo:** Proveedor detectado (`{ai_provider.upper()}`). Listo para analizar y generar.")
 
-        tab_analisis, tab_guion = st.tabs([
+        # ======================================================================
+        # 3.0 - PERFIL: SIN ESTO LA IA ACONSEJA A UN CREADOR PROMEDIO
+        # ======================================================================
+        perfil = st.session_state.get("creator_profile") or load_creator_profile()
+        st.session_state["creator_profile"] = perfil
+
+        perfil_completo = bool(perfil.get("nicho") and perfil.get("oferta"))
+        etiqueta_perfil = (
+            "🧬 Tu marca personal y tu capacidad real de producción"
+            if perfil_completo else
+            "🧬 ⚠️ Configura tu perfil primero (sin esto los consejos salen genéricos)"
+        )
+
+        with st.expander(etiqueta_perfil, expanded=not perfil_completo):
+            st.caption(
+                "Esto es lo que hace que el asesor te hable **a ti** y no a un creador promedio: "
+                "con tus seguidores reales no te va a proponer tácticas de cuenta grande, y con los videos "
+                "por semana que declares aquí el plan se reparte en **esos** slots (nunca más \"publica 1 diario\")."
+            )
+
+            with st.form("form_creator_profile"):
+                col_p1, col_p2 = st.columns([3, 2])
+
+                with col_p1:
+                    f_nicho = st.text_input(
+                        "¿De qué hablas? (tu nicho, concreto)",
+                        value=perfil.get("nicho", ""),
+                        placeholder="Ej: programación y vibecoding: construyo apps con IA y muestro el proceso"
+                    )
+                    f_publico = st.text_input(
+                        "¿A quién le hablas?",
+                        value=perfil.get("publico", ""),
+                        placeholder="Ej: devs junior y gente no técnica que quiere construir su primera app con IA"
+                    )
+                    f_modelo = st.radio(
+                        "¿De dónde quieres que salga el dinero?",
+                        options=["apps_propias", "mixto", "servicios"],
+                        index=["apps_propias", "mixto", "servicios"].index(
+                            perfil.get("modelo_negocio", "apps_propias")
+                        ),
+                        horizontal=True,
+                        format_func=lambda m: {
+                            "apps_propias": "📱 De mis apps (las redes son el canal)",
+                            "mixto": "🔀 Apps, con servicios como caja puente",
+                            "servicios": "🛠️ Servicios / trabajo a medida"
+                        }[m],
+                        help="Si eliges tus apps, el asesor tiene prohibido proponerte vender servicios, "
+                             "cursos o mentorías: todo se mide en usuarios del producto, no en clientes."
+                    )
+                    f_oferta = st.text_input(
+                        "¿Qué producto tienes y qué resuelve?",
+                        value=perfil.get("oferta", ""),
+                        placeholder="Ej: una app que automatiza la facturación de negocios pequeños"
+                    )
+                    f_tools = st.text_input(
+                        "Herramientas / stack que puedes mostrar en pantalla (opcional)",
+                        value=perfil.get("herramientas", ""),
+                        placeholder="Ej: Claude Code, Cursor, Python, n8n, Supabase"
+                    )
+
+                with col_p2:
+                    f_followers = st.number_input(
+                        "Seguidores que tienes hoy",
+                        min_value=0, step=10,
+                        value=int(perfil.get("followers", 0)),
+                        help="Define qué tácticas aplican. Con menos de 1.000 las vistas vienen del 'Para ti', "
+                             "no de tus seguidores: el asesor dejará de proponerte lives, colaboraciones o marcas."
+                    )
+                    f_por_semana = st.slider(
+                        "Videos que puedes publicar por semana",
+                        min_value=1, max_value=35,
+                        value=int(perfil.get("videos_por_semana", 7)),
+                        help="Sé honesto con lo que puedes sostener. Todo el plan se reparte exactamente en "
+                             "este número de slots."
+                    )
+                    f_modo = st.radio(
+                        "Modo de trabajo",
+                        options=["volumen", "sostenible", "quirurgico"],
+                        index=["volumen", "sostenible", "quirurgico"].index(perfil.get("modo", "sostenible")),
+                        format_func=lambda m: {
+                            "volumen": "🔁 Volumen / aprendizaje rápido",
+                            "sostenible": "⚖️ Sostenible",
+                            "quirurgico": "🎯 Quirúrgico (pocos y muy trabajados)"
+                        }[m],
+                        help="Volumen: muchos intentos, edición mínima, la mayoría va a fracasar y da igual; "
+                             "lo que importa es cuántos superan tu mediana. Quirúrgico: pocos videos sobre "
+                             "temas ya validados por tus datos."
+                    )
+
+                if st.form_submit_button("💾 Guardar perfil"):
+                    perfil = save_creator_profile({
+                        "nicho": f_nicho,
+                        "publico": f_publico,
+                        "oferta": f_oferta,
+                        "herramientas": f_tools,
+                        "followers": f_followers,
+                        "videos_por_semana": f_por_semana,
+                        "modo": f_modo,
+                        "modelo_negocio": f_modelo
+                    })
+                    st.session_state["creator_profile"] = perfil
+                    st.success("Perfil guardado. Todo lo que genere el asesor queda calibrado a esto.")
+                    st.rerun()
+
+            if perfil_completo:
+                st.caption(
+                    f"Ahora mismo: **{perfil['followers']} seguidores**, "
+                    f"**{perfil['videos_por_semana']} videos/semana** en modo **{perfil['modo']}**."
+                )
+
+        if not perfil_completo:
+            st.warning(
+                "⚠️ Sin nicho ni oferta declarados, la IA no sabe a quién le hablas: los ganchos van a servir "
+                "para cualquier tema y la monetización va a sonar a cuenta grande. Llena el perfil de arriba."
+            )
+
+        tab_analisis, tab_semana, tab_dinero, tab_guion = st.tabs([
             "🔎 Análisis de Rendimiento (Asesor Viral)",
+            "📅 Estructura de la semana",
+            "🚀 De las redes a mis apps",
             "🎣 Ganchos & Guiones"
         ])
 
@@ -615,9 +761,10 @@ with tab3:
                         ("mas_vistas", "👀 Más vistas / alcance nuevo"),
                         ("mas_interaccion", "💬 Más comentarios y compartidos"),
                         ("mas_seguidores", "➕ Convertir espectadores en seguidores"),
-                        ("vender", "💰 Traer clientes / vender")
+                        ("vender", "📱 Llevar usuarios a mi producto")
                     ],
-                    format_func=lambda x: x[1]
+                    format_func=lambda x: x[1],
+                    key="goal_opt_analisis"
                 )[0]
 
             with col_an2:
@@ -652,7 +799,8 @@ with tab3:
                             videos_stats,
                             account=tiktok_user,
                             extra_context=extra_ctx,
-                            goal=goal_opt
+                            goal=goal_opt,
+                            profile=perfil
                         )
 
                     st.session_state["ai_analysis_metrics"] = res_an.get("metrics")
@@ -725,6 +873,140 @@ with tab3:
                     key="btn_dl_analysis"
                 )
 
+
+        # ======================================================================
+        # 3.C - ESTRUCTURA DE LA SEMANA: UN SLOT POR VIDEO, YA DECIDIDO
+        # ======================================================================
+        with tab_semana:
+            st.markdown("#### Tu semana cerrada, no una lista de ideas")
+            st.caption(
+                f"Reparte **{perfil['videos_por_semana']} videos** (los que declaraste poder sostener) en los "
+                "7 días, con tema, gancho del segundo 0, duración y **qué variable prueba cada uno**. "
+                "Si ya corriste el análisis, el pilar principal sale de lo que tus números dicen que funciona."
+            )
+
+            metrics_semana = st.session_state.get("ai_analysis_metrics")
+            if metrics_semana and metrics_semana.get("videos"):
+                st.success("✅ Calibrado con tus métricas reales del análisis.")
+            else:
+                st.info("ℹ️ Todavía sin métricas: corre primero el análisis y la semana saldrá apoyada en datos "
+                        "en vez de hipótesis.")
+
+            col_s1, col_s2 = st.columns([1, 2])
+            with col_s1:
+                goal_semana = st.selectbox(
+                    "Objetivo de esta semana:",
+                    [
+                        ("mas_vistas", "👀 Más vistas / alcance nuevo"),
+                        ("mas_interaccion", "💬 Más comentarios y compartidos"),
+                        ("mas_seguidores", "➕ Convertir espectadores en seguidores"),
+                        ("vender", "📱 Llevar usuarios a mi producto")
+                    ],
+                    format_func=lambda x: x[1],
+                    key="goal_opt_semana"
+                )[0]
+            with col_s2:
+                ctx_semana = st.text_input(
+                    "¿Algo puntual de esta semana? (opcional)",
+                    placeholder="Ej: acabo de terminar una app de facturación y quiero mostrarla",
+                    key="ctx_semana"
+                )
+
+            if st.button("📅 ARMARME LA SEMANA", key="btn_run_weekly"):
+                with st.spinner("Repartiendo tus slots y decidiendo qué prueba cada video..."):
+                    res_w = generate_weekly_plan(
+                        metrics=metrics_semana,
+                        profile=perfil,
+                        extra_context=ctx_semana,
+                        goal=goal_semana
+                    )
+                if res_w.get("success"):
+                    st.session_state["ai_weekly_result"] = res_w.get("content")
+                    st.toast("¡Semana lista!", icon="📅")
+                else:
+                    st.error(res_w.get("message"))
+
+            if st.session_state.get("ai_weekly_result"):
+                st.divider()
+                st.markdown(st.session_state["ai_weekly_result"])
+                st.download_button(
+                    "📥 Descargar la semana (.md)",
+                    data=st.session_state["ai_weekly_result"],
+                    file_name="plan_semanal.md",
+                    mime="text/markdown",
+                    key="btn_dl_weekly"
+                )
+
+        # ======================================================================
+        # 3.D - CUANTA GENTE HACE FALTA PARA VIVIR DEL PRODUCTO
+        # ======================================================================
+        with tab_dinero:
+            st.markdown("#### Cuánta gente necesitas para vivir de tus apps")
+            st.caption(
+                "El producto es el negocio y las redes son el canal. Esto hace la cuenta **al revés**: "
+                "del ingreso que quieres → usuarios que pagan → registros → vistas al mes → **videos al mes "
+                "a tu promedio real**. Y te responde con cifras si de verdad tienes que hacerte grande "
+                "primero, o si con el alcance que ya tienes alcanza para arrancar."
+            )
+
+            metrics_dinero = st.session_state.get("ai_analysis_metrics")
+            if not (metrics_dinero and metrics_dinero.get("videos")):
+                st.info("ℹ️ Corre el análisis primero: sin tus vistas reales la cuenta sale con supuestos.")
+
+            col_d1, col_d2 = st.columns(2)
+            with col_d1:
+                precio_app = st.text_input(
+                    "¿Cuánto cobras (o cobrarías) por tu app?",
+                    placeholder="Ej: 5 USD al mes por usuario / pago único de 20 USD",
+                    key="precio_app",
+                    help="Es el dato que permite hacer la cuenta. Si lo dejas vacío, la IA asume un precio y "
+                         "lo marca como supuesto."
+                )
+            with col_d2:
+                meta_mes = st.text_input(
+                    "¿Cuánto quieres ganar al mes con tus apps?",
+                    placeholder="Ej: 2.000 USD al mes",
+                    key="meta_mes",
+                    help="La meta desde la que se cuenta hacia atrás."
+                )
+
+            ctx_dinero = st.text_area(
+                "¿Qué apps tienes ya, y qué no quieres hacer? (opcional)",
+                placeholder="Ej: tengo 2 apps publicadas y una que automatiza facturación; no quiero vender "
+                            "cursos ni trabajar para clientes; puedo dedicarle 10 horas por semana",
+                height=100,
+                key="ctx_dinero"
+            )
+
+            if st.button("🚀 HAZME LA CUENTA", key="btn_run_money"):
+                if not perfil.get("oferta"):
+                    st.warning("Llena primero '¿Qué producto tienes y qué resuelve?' en tu perfil: sin eso "
+                               "la cuenta sale a ciegas.")
+                with st.spinner("Contando hacia atrás desde tu meta..."):
+                    res_m = generate_monetization_plan(
+                        metrics=metrics_dinero,
+                        profile=perfil,
+                        extra_context=ctx_dinero,
+                        precio=precio_app,
+                        meta_mensual=meta_mes
+                    )
+                if res_m.get("success"):
+                    st.session_state["ai_money_result"] = res_m.get("content")
+                    st.toast("¡Cuenta lista!", icon="🚀")
+                else:
+                    st.error(res_m.get("message"))
+
+            if st.session_state.get("ai_money_result"):
+                st.divider()
+                st.markdown(st.session_state["ai_money_result"])
+                st.download_button(
+                    "📥 Descargar la cuenta (.md)",
+                    data=st.session_state["ai_money_result"],
+                    file_name="camino_a_mis_apps.md",
+                    mime="text/markdown",
+                    key="btn_dl_money"
+                )
+
         # ======================================================================
         # 3.B - GENERADOR DE GUIONES CON MICROGANCHOS
         # ======================================================================
@@ -760,7 +1042,8 @@ with tab3:
                                 "url": preloaded_video.get("webpage_url", "") if preloaded_video else ""
                             },
                             n=10,
-                            account_context=account_context
+                            account_context=account_context,
+                            profile=perfil
                         )
                     if res_h.get("success"):
                         st.session_state["ai_hooks_result"] = res_h.get("content")
@@ -811,7 +1094,8 @@ with tab3:
                                 },
                                 style=style_opt,
                                 target_duration=duration_opt,
-                                account_context=account_context
+                                account_context=account_context,
+                                profile=perfil
                             )
                         if result.get("success"):
                             st.session_state["ai_generated_result"] = result.get("content")
