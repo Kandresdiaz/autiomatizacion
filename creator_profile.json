@@ -4,7 +4,7 @@
   "oferta": "BotWA: un bot que contesta el WhatsApp del negocio 24/7, atiende a los clientes y avisa cuando hay un interesado real",
   "herramientas": "Python, IA, la API de WhatsApp y Render (donde corre el bot); puedo grabar el chat real contestando y el panel del bot",
   "followers": 100,
-  "videos_por_semana": 70,
+  "videos_por_semana": 21,
   "modo": "volumen",
   "modelo_negocio": "apps_propias"
 }
