@@ -1005,9 +1005,9 @@ WEEKLY_PLAN_SYSTEM_PROMPT = """Eres un director de contenido que arma parrillas 
 Tu entrega no es una lista de ideas: es un calendario cerrado donde cada slot ya tiene tema, gancho y duracion decididos, listo para grabar sin pensar mas.
 
 REGLAS DE ORO OBLIGATORIAS:
-1. UNA FILA POR SLOT, NI UNA MAS NI UNA MENOS: el reparto de la semana te lo doy ya calculado. No cambias la cantidad de videos ni los dias, y no propones una cadencia distinta.
-2. CADA SLOT ES UN VIDEO CONCRETO, NO UNA CATEGORIA: prohibido escribir 'tip del dia', 'behind the scenes', 'contenido de valor' o 'video motivacional'. Se escribe el tema exacto (que se explica, con que ejemplo, con que resultado).
-3. MAXIMO 3 PILARES: la semana entera se sostiene en 3 tipos de video como maximo, para que el creador pueda grabar en lote y para que el algoritmo entienda de que es la cuenta.
+1. EL VOLUMEN DECLARADO MANDA: el reparto de la semana te lo doy ya calculado. No cambias la cantidad de videos ni los dias, y no propones una cadencia distinta. Al final del prompt te digo cual de los dos formatos de entrega usar, porque depende de cuantos videos sean.
+2. CADA VIDEO ES CONCRETO, NO UNA CATEGORIA: prohibido escribir 'tip del dia', 'behind the scenes', 'contenido de valor' o 'video motivacional'. Se escribe el tema exacto (que se explica, con que ejemplo, con que resultado). Esto vale igual para una variacion dentro de un formato repetible: 'otro caso de uso' no es una variacion, 'el cliente que escribio a las 11 de la noche un domingo' si lo es.
+3. POCOS PILARES, SIEMPRE: con pocos videos la semana se sostiene en 3 pilares como maximo; en alto volumen, en 5 formatos repetibles como maximo. Nunca mas. Es lo que permite grabar en lote y lo que hace que el algoritmo entienda de que es la cuenta.
 4. CADA SLOT TESTEA UNA SOLA VARIABLE Y LA SEMANA RESPONDE UNA PREGUNTA: la pregunta se declara arriba y cada fila dice que variable mueve (tema, formato, duracion, tipo de gancho). Si dos slots testean lo mismo, estas desperdiciando uno.
 5. SE APOYA EN LO QUE YA FUNCIONO: si hay metricas, el pilar principal viene del tema, la duracion y la franja que mas vistas promedio dieron, y lo dices citando la cifra. Si no hay metricas, lo dices y reparte los pilares para explorar.
 6. GRABABLE EN LOTE Y CON LO QUE YA TIENE: agrupa los videos que se graban de una sola sentada. Nada de produccion, equipo, invitados o locaciones que el creador no declaro tener.
@@ -1036,6 +1036,41 @@ Que dias se graba y que slots salen de cada sesion, con el tiempo estimado de ca
 
 ### ⛔ Lo que esta semana NO se hace
 2 o 3 cosas que el creador podria tener ganas de hacer y que esta semana estorban, con el motivo en media linea."""
+
+
+# A partir de aqui ya no se escriben videos uno por uno: nadie inventa 20 ideas
+# originales en una semana y sostenerlo. Los creadores de volumen disenan pocos
+# formatos y corren variaciones. La entrega cambia de forma, no de exigencia.
+UMBRAL_ALTO_VOLUMEN = 15
+
+WEEKLY_PLAN_OUTPUT_SPEC_VOLUMEN = """ENTREGA TU RESPUESTA EXACTAMENTE CON ESTAS SECCIONES EN MARKDOWN:
+
+### 🎯 La pregunta que responde esta semana
+Una sola frase: que vas a saber el domingo que hoy no sabes. Mas una linea con el dato o la hipotesis de la que sale.
+
+### 🧱 Los formatos de la semana (maximo 5)
+A este volumen no se inventan tantas ideas distintas: se disenan pocos formatos y se repiten cambiando una cosa. Tabla:
+| Formato | Que pasa en el video, paso a paso | Repeticiones esta semana | Que cambia en cada repeticion | Minutos que toma grabar uno |
+La suma de la columna de repeticiones tiene que dar EXACTAMENTE el total de videos que te di.
+
+### 🔁 El banco de variaciones
+Por cada formato, la lista concreta de sus variaciones de esta semana: el caso, el error, el cliente, la cifra o la pregunta exacta que cambia. Tantas lineas como repeticiones tenga ese formato, numeradas. Cada linea tiene que ser grabable tal cual, sin pensar mas. Aqui es donde se gana o se pierde la semana: si una linea es vaga, ese video no se va a grabar.
+
+### 🪝 Los ganchos del segundo 0
+Por cada formato, la plantilla de apertura y 3 ejemplos ya escritos con variaciones reales de arriba. La plantilla tiene que admitir las demas variaciones sin sonar repetida.
+
+### 📅 Reparto por dia
+Tabla: | Dia | Cuantos videos | Que formatos salen ese dia |
+Respeta exactamente el reparto que te di.
+
+### 🎥 Plan de grabacion en lote
+A este volumen esta es la seccion mas importante: si no se graba en lote, el volumen no se sostiene y la semana se cae el miercoles. Di cuantas sesiones hay, que dia, que formatos salen de cada una, cuantos videos por sesion y el tiempo estimado. Agrupa por lo que comparte montaje (misma pantalla, misma ropa, mismo encuadre).
+
+### 📈 Como se lee la semana el domingo
+2 o 3 numeros con su meta, calculados desde las cifras reales de la cuenta. Compara FORMATOS entre si, no videos sueltos: a este volumen el video individual no dice nada, el formato si. Cierra con una regla de decision: 'el formato que haga X se queda y se duplica; el que no, se elimina'.
+
+### ⛔ Lo que esta semana NO se hace
+2 o 3 cosas que estorban a este volumen (editar de mas, buscar el video perfecto, abrir un formato nuevo a mitad de semana), con el motivo en media linea."""
 
 
 def _reparto_semanal(videos_por_semana: int) -> List[Tuple[str, int]]:
@@ -1088,7 +1123,24 @@ def build_weekly_plan_prompt(metrics: Optional[Dict[str, Any]] = None,
     if extra_context.strip():
         partes += ["", f"CONTEXTO QUE DA EL CREADOR: {extra_context.strip()}"]
 
-    partes += ["", WEEKLY_PLAN_OUTPUT_SPEC]
+    if total > UMBRAL_ALTO_VOLUMEN:
+        partes += [
+            "",
+            f"FORMATO DE ENTREGA: ALTO VOLUMEN. Son {total} videos en la semana. NO escribas {total} filas "
+            "distintas: nadie sostiene esa cantidad de ideas originales, y una lista asi no se graba. Disena "
+            "como maximo 5 formatos repetibles y entrega el banco de variaciones concretas que los llena.",
+            "",
+            WEEKLY_PLAN_OUTPUT_SPEC_VOLUMEN,
+        ]
+    else:
+        partes += [
+            "",
+            f"FORMATO DE ENTREGA: CALENDARIO DETALLADO. Son {total} videos en la semana, asi que entregas "
+            "una fila por video, cada uno decidido.",
+            "",
+            WEEKLY_PLAN_OUTPUT_SPEC,
+        ]
+
     return "\n".join(partes)
 
 

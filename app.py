@@ -689,11 +689,16 @@ with tab3:
                     )
                     f_por_semana = st.slider(
                         "Videos que puedes publicar por semana",
-                        min_value=1, max_value=35,
+                        min_value=1, max_value=70,
                         value=int(perfil.get("videos_por_semana", 7)),
-                        help="Sé honesto con lo que puedes sostener. Todo el plan se reparte exactamente en "
-                             "este número de slots."
+                        help="Sé honesto con lo que puedes sostener: todo el plan se reparte exactamente en "
+                             "este número de slots. A partir de 15 el plan deja de darte un video por fila y "
+                             "pasa a darte formatos repetibles con su banco de variaciones, que es como se "
+                             "sostiene el volumen de verdad."
                     )
+                    st.caption(f"≈ **{round(f_por_semana / 7, 1)} videos al día**."
+                               + (" Modo alto volumen: el plan vendrá por formatos, no video por video."
+                                  if f_por_semana > 15 else ""))
                     f_modo = st.radio(
                         "Modo de trabajo",
                         options=["volumen", "sostenible", "quirurgico"],
@@ -879,10 +884,15 @@ with tab3:
         # ======================================================================
         with tab_semana:
             st.markdown("#### Tu semana cerrada, no una lista de ideas")
+            _alto_volumen = perfil["videos_por_semana"] > 15
             st.caption(
                 f"Reparte **{perfil['videos_por_semana']} videos** (los que declaraste poder sostener) en los "
-                "7 días, con tema, gancho del segundo 0, duración y **qué variable prueba cada uno**. "
-                "Si ya corriste el análisis, el pilar principal sale de lo que tus números dicen que funciona."
+                "7 días. "
+                + ("A tu volumen el plan no viene video por video: viene como **formatos repetibles** con su "
+                   "banco de variaciones concretas y el plan de grabación en lote, que es como se sostiene. "
+                   if _alto_volumen else
+                   "Cada slot trae tema, gancho del segundo 0, duración y **qué variable prueba**. ")
+                + "Si ya corriste el análisis, se apoya en lo que tus números dicen que funciona."
             )
 
             metrics_semana = st.session_state.get("ai_analysis_metrics")
