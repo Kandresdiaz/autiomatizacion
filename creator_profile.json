@@ -1,0 +1,10 @@
+{
+  "nicho": "automatizo tareas repetitivas de negocios pequenos con IA y lo muestro funcionando en pantalla; mi producto actual es BotWA, un bot que contesta el WhatsApp del negocio solo",
+  "publico": "duenos de negocios pequenos que contestan WhatsApp a mano y por eso pierden clientes, ventas o tiempo fuera de horario; no son tecnicos y no quieren serlo",
+  "oferta": "BotWA: un bot que contesta el WhatsApp del negocio 24/7, atiende a los clientes y avisa cuando hay un interesado real",
+  "herramientas": "Python, IA, la API de WhatsApp y Render (donde corre el bot); puedo grabar el chat real contestando y el panel del bot",
+  "followers": 100,
+  "videos_por_semana": 7,
+  "modo": "sostenible",
+  "modelo_negocio": "apps_propias"
+}
