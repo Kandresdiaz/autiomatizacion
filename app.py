@@ -888,10 +888,12 @@ with tab3:
             st.caption(
                 f"Reparte **{perfil['videos_por_semana']} videos** (los que declaraste poder sostener) en los "
                 "7 días. "
-                + ("A tu volumen el plan no viene video por video: viene como **formatos repetibles** con su "
-                   "banco de variaciones concretas y el plan de grabación en lote, que es como se sostiene. "
+                + ("A tu volumen el plan viene por **tríos**: cada idea en 3 aperturas distintas, más los "
+                   "formatos repetibles y las sesiones de grabación. Así el domingo sabes si falló la idea "
+                   "o falló el gancho. "
                    if _alto_volumen else
-                   "Cada slot trae tema, gancho del segundo 0, duración y **qué variable prueba**. ")
+                   "Los videos se agrupan en **tríos** (una idea, 3 aperturas) para poder distinguir si "
+                   "falla la idea o falla el gancho. ")
                 + "Si ya corriste el análisis, se apoya en lo que tus números dicen que funciona."
             )
 

@@ -1008,12 +1008,15 @@ REGLAS DE ORO OBLIGATORIAS:
 1. EL VOLUMEN DECLARADO MANDA: el reparto de la semana te lo doy ya calculado. No cambias la cantidad de videos ni los dias, y no propones una cadencia distinta. Al final del prompt te digo cual de los dos formatos de entrega usar, porque depende de cuantos videos sean.
 2. CADA VIDEO ES CONCRETO, NO UNA CATEGORIA: prohibido escribir 'tip del dia', 'behind the scenes', 'contenido de valor' o 'video motivacional'. Se escribe el tema exacto (que se explica, con que ejemplo, con que resultado). Esto vale igual para una variacion dentro de un formato repetible: 'otro caso de uso' no es una variacion, 'el cliente que escribio a las 11 de la noche un domingo' si lo es.
 3. POCOS PILARES, SIEMPRE: con pocos videos la semana se sostiene en 3 pilares como maximo; en alto volumen, en 5 formatos repetibles como maximo. Nunca mas. Es lo que permite grabar en lote y lo que hace que el algoritmo entienda de que es la cuenta.
-4. CADA SLOT TESTEA UNA SOLA VARIABLE Y LA SEMANA RESPONDE UNA PREGUNTA: la pregunta se declara arriba y cada fila dice que variable mueve (tema, formato, duracion, tipo de gancho). Si dos slots testean lo mismo, estas desperdiciando uno.
-5. SE APOYA EN LO QUE YA FUNCIONO: si hay metricas, el pilar principal viene del tema, la duracion y la franja que mas vistas promedio dieron, y lo dices citando la cifra. Si no hay metricas, lo dices y reparte los pilares para explorar.
-6. GRABABLE EN LOTE Y CON LO QUE YA TIENE: agrupa los videos que se graban de una sola sentada. Nada de produccion, equipo, invitados o locaciones que el creador no declaro tener.
-7. NADA QUE NECESITE AUDIENCIA QUE NO EXISTE: respeta la etapa de la cuenta del perfil. En arranque no hay lives, ni colaboraciones, ni 'responde a tus comentarios' como slot.
-8. CERO RELLENO: no escribes introduccion, ni cierre motivacional, ni explicaciones de por que el video corto funciona. Solo el plan.
-9. ESPANOL NEUTRO, directo, en tablas.
+4. LA UNIDAD ES EL TRIO, NO EL VIDEO: cada idea se publica en 3 ejecuciones distintas que cuentan LO MISMO y cambian UNA sola cosa (el angulo del gancho, el formato o la duracion), declarada explicitamente. Con un solo video es imposible saber si fallo la idea o fallo la ejecucion; con tres si. Si cambian dos cosas a la vez entre las ejecuciones, el resultado no se puede leer y el trio no sirve.
+5. NUNCA SE PUBLICA UN TRIO A MEDIAS: 1 o 2 de 3 no ensena nada. Si el creador no alcanza el volumen de la semana, se recortan TRIOS COMPLETOS, nunca se dejan trios incompletos. Dilo explicitamente en la entrega.
+6. LAS 3 EJECUCIONES NO COMPITEN ENTRE SI: no se publican seguidas ni el mismo dia a la misma hora. Separalas en el reparto.
+7. CADA TRIO TESTEA UNA SOLA VARIABLE Y LA SEMANA RESPONDE UNA PREGUNTA: la pregunta se declara arriba y cada trio dice que variable mueve. Si dos trios testean exactamente lo mismo, estas desperdiciando uno.
+8. SE APOYA EN LO QUE YA FUNCIONO: si hay metricas, el pilar principal viene del tema, la duracion y la franja que mas vistas promedio dieron, y lo dices citando la cifra. Si no hay metricas, lo dices y reparte los pilares para explorar.
+9. GRABABLE EN LOTE Y CON LO QUE YA TIENE: agrupa los videos que se graban de una sola sentada. Nada de produccion, equipo, invitados o locaciones que el creador no declaro tener.
+10. NADA QUE NECESITE AUDIENCIA QUE NO EXISTE: respeta la etapa de la cuenta del perfil. En arranque no hay lives, ni colaboraciones, ni 'responde a tus comentarios' como slot.
+11. CERO RELLENO: no escribes introduccion, ni cierre motivacional, ni explicaciones de por que el video corto funciona. Solo el plan.
+12. ESPANOL NEUTRO, directo, en tablas.
 """
 
 WEEKLY_PLAN_OUTPUT_SPEC = """ENTREGA TU RESPUESTA EXACTAMENTE CON ESTAS SECCIONES EN MARKDOWN:
@@ -1026,13 +1029,14 @@ Tabla: | Pilar | Que videos entran ahi | Por que este pilar (dato o hipotesis) |
 
 ### 📅 El calendario cerrado
 Tabla con EXACTAMENTE una fila por slot del reparto que te di:
-| # | Dia | Pilar | Tema concreto del video | Gancho del segundo 0 (frase exacta que se dice) | Dur. | Que se ve en pantalla | Variable que testea |
+| # | Dia | Idea | Ejec. | Pilar | Tema concreto del video | Gancho del segundo 0 (frase exacta que se dice) | Dur. | Que se ve en pantalla |
+La columna "Idea" agrupa los videos en trios: la misma idea contada en 3 aperturas distintas (A, B y C en la columna "Ejec."), para poder distinguir si falla la idea o falla la apertura. Si el total no es multiplo de 3, el sobrante va a la idea mas prometedora. Si el total es menor que 3, dilo y haz un solo video, avisando de que con uno solo no se podra saber cual de las dos cosas fallo.
 
 ### 🎥 Plan de grabacion en lote
 Que dias se graba y que slots salen de cada sesion, con el tiempo estimado de cada sesion. Agrupa por lo que comparte montaje (misma pantalla, misma ropa, mismo encuadre).
 
 ### 📈 Como se lee la semana el domingo
-2 o 3 numeros con su meta, calculados desde las cifras reales de la cuenta. Y una regla de decision explicita: 'si pasa X, la semana que viene se hace Y; si no pasa, se descarta Z'.
+2 o 3 numeros con su meta, calculados desde las cifras reales de la cuenta. Y la lectura en dos niveles: DENTRO del trio (si una ejecucion despega y las otras no, la idea servia y lo que decide es la apertura: ese gancho se repite) y ENTRE trios (si las 3 ejecuciones de una idea van mal, fue la idea y se descarta el tema). Cierra con una regla de decision explicita: 'si pasa X, la semana que viene se hace Y; si no pasa, se descarta Z'.
 
 ### ⛔ Lo que esta semana NO se hace
 2 o 3 cosas que el creador podria tener ganas de hacer y que esta semana estorban, con el motivo en media linea."""
@@ -1048,29 +1052,40 @@ WEEKLY_PLAN_OUTPUT_SPEC_VOLUMEN = """ENTREGA TU RESPUESTA EXACTAMENTE CON ESTAS 
 ### 🎯 La pregunta que responde esta semana
 Una sola frase: que vas a saber el domingo que hoy no sabes. Mas una linea con el dato o la hipotesis de la que sale.
 
-### 🧱 Los formatos de la semana (maximo 5)
-A este volumen no se inventan tantas ideas distintas: se disenan pocos formatos y se repiten cambiando una cosa. Tabla:
-| Formato | Que pasa en el video, paso a paso | Repeticiones esta semana | Que cambia en cada repeticion | Minutos que toma grabar uno |
-La suma de la columna de repeticiones tiene que dar EXACTAMENTE el total de videos que te di.
+### 💡 Las ideas de la semana
+El total de videos dividido entre 3: esas son las ideas. Si la division deja resto, dilo y suma ese video o esos dos a la idea mas prometedora, explicando por que esa. Tabla:
+| # | La idea, en concreto (que se cuenta) | Por que esta idea (dato o hipotesis) | Que variable prueban sus 3 ejecuciones |
+Prohibido que una idea sea una categoria. 'Casos de uso del bot' no es una idea; 'el cliente que escribio a las 11 de la noche un domingo y nadie le contesto' si lo es.
 
-### 🔁 El banco de variaciones
-Por cada formato, la lista concreta de sus variaciones de esta semana: el caso, el error, el cliente, la cifra o la pregunta exacta que cambia. Tantas lineas como repeticiones tenga ese formato, numeradas. Cada linea tiene que ser grabable tal cual, sin pensar mas. Aqui es donde se gana o se pierde la semana: si una linea es vaga, ese video no se va a grabar.
+### 🔀 Los 3 videos de cada idea
+Por CADA idea, una tabla de exactamente 3 filas. Las tres cuentan lo mismo y cambian UNA sola cosa, que escribes encima de la tabla ("variable que cambia: el angulo del gancho"):
+| | Gancho del segundo 0 (la frase exacta que se dice) | Que se ve en pantalla | Dur. |
+| A | | | |
+| B | | | |
+| C | | | |
+Las tres aperturas tienen que ser de verdad distintas entre si, no la misma frase reordenada. Y las tres tienen que poder grabarse en la misma sesion.
 
-### 🪝 Los ganchos del segundo 0
-Por cada formato, la plantilla de apertura y 3 ejemplos ya escritos con variaciones reales de arriba. La plantilla tiene que admitir las demas variaciones sin sonar repetida.
+### 🧰 Los formatos que se repiten (maximo 5)
+Los moldes de grabacion que usan las ejecuciones de arriba, para poder grabar en lote: | Formato | Que pasa en el video, paso a paso | Cuantas veces se usa esta semana | Minutos que toma grabar uno |
 
 ### 📅 Reparto por dia
-Tabla: | Dia | Cuantos videos | Que formatos salen ese dia |
-Respeta exactamente el reparto que te di.
+Tabla: | Dia | Cuantos videos | Que ejecuciones salen ese dia (por ejemplo: idea 3-A, idea 7-B) |
+Respeta exactamente el reparto que te di. Las 3 ejecuciones de una misma idea NO pueden ir seguidas ni el mismo dia a la misma hora: separalas para que no compitan.
 
 ### 🎥 Plan de grabacion en lote
-A este volumen esta es la seccion mas importante: si no se graba en lote, el volumen no se sostiene y la semana se cae el miercoles. Di cuantas sesiones hay, que dia, que formatos salen de cada una, cuantos videos por sesion y el tiempo estimado. Agrupa por lo que comparte montaje (misma pantalla, misma ropa, mismo encuadre).
+A este volumen esta es la seccion mas importante: si no se graba en lote, el volumen no se sostiene y la semana se cae el miercoles. Di cuantas sesiones hay, que dia, que ideas y ejecuciones salen de cada una, cuantos videos por sesion y el tiempo estimado. Agrupa por lo que comparte montaje. Recuerda que las 3 ejecuciones de una idea se graban juntas: es el mismo tema, solo cambia la apertura.
+
+### ✂️ Si la semana se te queda corta
+Di explicitamente cuantos trios completos son el minimo util y en que orden se recortan si no da el tiempo. REGLA: se recortan ideas enteras (sus 3 ejecuciones), nunca se publica 1 o 2 de 3, porque un trio incompleto no ensena nada y el video se desperdicia.
 
 ### 📈 Como se lee la semana el domingo
-2 o 3 numeros con su meta, calculados desde las cifras reales de la cuenta. Compara FORMATOS entre si, no videos sueltos: a este volumen el video individual no dice nada, el formato si. Cierra con una regla de decision: 'el formato que haga X se queda y se duplica; el que no, se elimina'.
+2 o 3 numeros con su meta, calculados desde las cifras reales de la cuenta. Y la lectura en dos niveles, explicada con esta logica:
+- DENTRO del trio: si una ejecucion despega y las otras dos no, la idea servia y lo que decide es la APERTURA. Ese gancho se repite con otras ideas.
+- ENTRE trios: si las 3 ejecuciones de una idea van mal, no fue la ejecucion, fue la IDEA. Se descarta el tema completo y no se insiste.
+- Si las 3 van bien, la idea es un filon: se abre una serie con ella la semana siguiente.
 
 ### ⛔ Lo que esta semana NO se hace
-2 o 3 cosas que estorban a este volumen (editar de mas, buscar el video perfecto, abrir un formato nuevo a mitad de semana), con el motivo en media linea."""
+2 o 3 cosas que estorban a este volumen (editar de mas, buscar el video perfecto, abrir una idea nueva a mitad de semana, publicar un trio a medias), con el motivo en media linea."""
 
 
 def _reparto_semanal(videos_por_semana: int) -> List[Tuple[str, int]]:
@@ -1126,9 +1141,11 @@ def build_weekly_plan_prompt(metrics: Optional[Dict[str, Any]] = None,
     if total > UMBRAL_ALTO_VOLUMEN:
         partes += [
             "",
-            f"FORMATO DE ENTREGA: ALTO VOLUMEN. Son {total} videos en la semana. NO escribas {total} filas "
-            "distintas: nadie sostiene esa cantidad de ideas originales, y una lista asi no se graba. Disena "
-            "como maximo 5 formatos repetibles y entrega el banco de variaciones concretas que los llena.",
+            f"FORMATO DE ENTREGA: ALTO VOLUMEN POR TRIOS. Son {total} videos en la semana, que son "
+            f"{total // 3} ideas de 3 ejecuciones cada una"
+            + (f" y sobran {total % 3} video(s) que asignas a la idea mas prometedora" if total % 3 else "")
+            + f". NO escribas {total} ideas distintas: nadie sostiene eso y una lista asi no se graba. "
+            "Escribe las ideas y, por cada una, sus 3 aperturas distintas.",
             "",
             WEEKLY_PLAN_OUTPUT_SPEC_VOLUMEN,
         ]
