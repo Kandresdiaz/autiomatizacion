@@ -434,7 +434,7 @@
     "webpage_url": "https://www.tiktok.com/@b00kevin/video/7702569895770213633",
     "platforms": {
       "youtube": true,
-      "instagram": false,
+      "instagram": true,
       "x": false,
       "reddit": false
     }
