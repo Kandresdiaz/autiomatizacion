@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import json
 import time
@@ -25,6 +26,134 @@ import datetime
 PROCESSED_FILE = "processed_videos.json"
 QUEUE_FILE = "pending_queue.json"
 STATUS_FILE = "platform_status.json"
+
+# ==============================================================================
+# MULTICUENTA
+# ==============================================================================
+# La cuenta principal usa los archivos de la raiz y los secrets sin prefijo, igual
+# que siempre. Cada cuenta adicional guarda su estado en accounts/<id>/ y lee sus
+# credenciales con prefijo: ANIMADO_YOUTUBE_REFRESH_TOKEN, ANIMADO_INSTAGRAM_...
+# Una cuenta adicional NUNCA hereda las credenciales de la principal: si le falta
+# un token, esa red queda sin configurar en vez de publicar en el canal ajeno.
+
+ACCOUNTS_FILE = "accounts.json"
+ACCOUNTS_DIR = "accounts"
+PRIMARY_ACCOUNT_ID = "principal"
+ACCOUNT_SCOPED_PREFIXES = ("TIKTOK_", "YOUTUBE_", "INSTAGRAM_", "X_", "REDDIT_")
+
+_ACTIVE_ACCOUNT: Dict[str, str] = {"id": PRIMARY_ACCOUNT_ID}
+
+
+def account_slug(texto: str) -> str:
+    """Identificador seguro para carpeta y prefijo: 'Canal Animado' -> 'canal_animado'."""
+    limpio = re.sub(r"[^a-z0-9]+", "_", (texto or "").strip().lower().lstrip("@")).strip("_")
+    return limpio[:30]
+
+
+def account_prefix(account_id: str) -> str:
+    """Prefijo de sus secrets. Vacio para la principal."""
+    return "" if account_id == PRIMARY_ACCOUNT_ID else account_slug(account_id).upper()
+
+
+def load_accounts() -> List[Dict]:
+    """Cuentas registradas, siempre con la principal primero."""
+    datos = []
+    if os.path.exists(ACCOUNTS_FILE):
+        try:
+            with open(ACCOUNTS_FILE, "r", encoding="utf-8") as f:
+                datos = (json.load(f) or {}).get("accounts", [])
+        except Exception:
+            datos = []
+
+    principal = next((a for a in datos if a.get("id") == PRIMARY_ACCOUNT_ID), None) or {}
+    cuentas = [{
+        "id": PRIMARY_ACCOUNT_ID,
+        "label": principal.get("label") or "Cuenta principal",
+        "tiktok_username": "",  # la principal lo toma de TIKTOK_USERNAME, como siempre
+        "enabled": principal.get("enabled", True),
+    }]
+    for a in datos:
+        aid = account_slug(a.get("id", ""))
+        if not aid or aid == PRIMARY_ACCOUNT_ID or any(c["id"] == aid for c in cuentas):
+            continue
+        cuentas.append({
+            "id": aid,
+            "label": a.get("label") or aid,
+            "tiktok_username": (a.get("tiktok_username") or "").strip(),
+            "enabled": bool(a.get("enabled", True)),
+        })
+    return cuentas
+
+
+def save_accounts(cuentas: List[Dict]):
+    with open(ACCOUNTS_FILE, "w", encoding="utf-8") as f:
+        json.dump({"accounts": cuentas}, f, indent=2, ensure_ascii=False)
+
+
+def upsert_account(account_id: str, label: str = "", tiktok_username: str = "",
+                   enabled: Optional[bool] = None) -> Dict:
+    """Crea o actualiza una cuenta y devuelve su registro."""
+    aid = PRIMARY_ACCOUNT_ID if account_id == PRIMARY_ACCOUNT_ID else account_slug(account_id)
+    if not aid:
+        raise ValueError("El nombre de la cuenta no puede quedar vacio.")
+    cuentas = load_accounts()
+    actual = next((c for c in cuentas if c["id"] == aid), None)
+    if actual is None:
+        actual = {"id": aid, "label": label or aid, "tiktok_username": "", "enabled": True}
+        cuentas.append(actual)
+    if label:
+        actual["label"] = label
+    if tiktok_username and aid != PRIMARY_ACCOUNT_ID:
+        actual["tiktok_username"] = "@" + tiktok_username.strip().lstrip("@")
+    if enabled is not None:
+        actual["enabled"] = bool(enabled)
+    save_accounts(cuentas)
+    return actual
+
+
+def get_account(account_id: str) -> Optional[Dict]:
+    return next((c for c in load_accounts() if c["id"] == account_id), None)
+
+
+def set_active_account(account_id: str) -> Dict:
+    """Todo lo que lee o escribe estado (y get_config) pasa a usar esta cuenta."""
+    cuenta = get_account(account_id) or get_account(PRIMARY_ACCOUNT_ID)
+    _ACTIVE_ACCOUNT.clear()
+    _ACTIVE_ACCOUNT.update(cuenta)
+    return cuenta
+
+
+def active_account() -> Dict:
+    return dict(_ACTIVE_ACCOUNT)
+
+
+def data_path(nombre: str) -> str:
+    """Ruta de un archivo de estado para la cuenta activa."""
+    aid = _ACTIVE_ACCOUNT.get("id", PRIMARY_ACCOUNT_ID)
+    if aid == PRIMARY_ACCOUNT_ID:
+        return nombre
+    carpeta = os.path.join(ACCOUNTS_DIR, aid)
+    os.makedirs(carpeta, exist_ok=True)
+    return os.path.join(carpeta, nombre)
+
+
+def _scope_config_to_account(config: Dict[str, str]) -> Dict[str, str]:
+    """Deja en la config solo las credenciales de la cuenta activa."""
+    aid = _ACTIVE_ACCOUNT.get("id", PRIMARY_ACCOUNT_ID)
+    if aid == PRIMARY_ACCOUNT_ID:
+        return config
+
+    prefijo = account_prefix(aid) + "_"
+    original = dict(config)
+    for clave in list(config):
+        if clave.startswith(ACCOUNT_SCOPED_PREFIXES):
+            del config[clave]
+    for clave, valor in original.items():
+        if clave.startswith(prefijo) and valor:
+            config[clave[len(prefijo):]] = valor
+    if not config.get("TIKTOK_USERNAME") and _ACTIVE_ACCOUNT.get("tiktok_username"):
+        config["TIKTOK_USERNAME"] = _ACTIVE_ACCOUNT["tiktok_username"]
+    return config
 
 # ==============================================================================
 # UTILIDADES
@@ -60,12 +189,23 @@ def get_config() -> Dict[str, str]:
     except Exception:
         pass
 
-    return config
+    # En GitHub Actions llegan todos los secrets juntos (ALL_SECRETS), asi una
+    # cuenta nueva solo necesita sus secrets con prefijo, sin tocar el workflow.
+    todos = os.environ.get("ALL_SECRETS", "")
+    if todos:
+        try:
+            for k, v in (json.loads(todos) or {}).items():
+                if isinstance(v, str) and v and k not in config:
+                    config[k] = v
+        except Exception:
+            pass
+
+    return _scope_config_to_account(config)
 
 def load_processed_ids() -> List[str]:
-    if os.path.exists(PROCESSED_FILE):
+    if os.path.exists(data_path(PROCESSED_FILE)):
         try:
-            with open(PROCESSED_FILE, "r", encoding="utf-8") as f:
+            with open(data_path(PROCESSED_FILE), "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return []
@@ -75,7 +215,7 @@ def save_processed_id(video_id: str):
     processed = load_processed_ids()
     if video_id not in processed:
         processed.append(video_id)
-        with open(PROCESSED_FILE, "w", encoding="utf-8") as f:
+        with open(data_path(PROCESSED_FILE), "w", encoding="utf-8") as f:
             json.dump(processed, f, indent=2)
 
 def remove_processed_id(video_id: str) -> bool:
@@ -83,16 +223,16 @@ def remove_processed_id(video_id: str) -> bool:
     processed = load_processed_ids()
     if video_id in processed:
         processed.remove(video_id)
-        with open(PROCESSED_FILE, "w", encoding="utf-8") as f:
+        with open(data_path(PROCESSED_FILE), "w", encoding="utf-8") as f:
             json.dump(processed, f, indent=2)
         return True
     return False
 
 def load_pending_queue() -> List[Dict]:
     """Carga la lista de videos pendientes en cola."""
-    if os.path.exists(QUEUE_FILE):
+    if os.path.exists(data_path(QUEUE_FILE)):
         try:
-            with open(QUEUE_FILE, "r", encoding="utf-8") as f:
+            with open(data_path(QUEUE_FILE), "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return []
@@ -100,7 +240,7 @@ def load_pending_queue() -> List[Dict]:
 
 def save_pending_queue(queue: List[Dict]):
     """Guarda la lista de videos en cola pendiente."""
-    with open(QUEUE_FILE, "w", encoding="utf-8") as f:
+    with open(data_path(QUEUE_FILE), "w", encoding="utf-8") as f:
         json.dump(queue, f, indent=2, ensure_ascii=False)
 
 def add_to_pending_queue(videos: List[Dict]) -> int:
@@ -141,16 +281,16 @@ def remove_from_pending_queue(video_id: str) -> bool:
 
 def load_platform_status() -> Dict[str, Dict]:
     """Carga el estado de publicacion por red social de cada video ya intentado."""
-    if os.path.exists(STATUS_FILE):
+    if os.path.exists(data_path(STATUS_FILE)):
         try:
-            with open(STATUS_FILE, "r", encoding="utf-8") as f:
+            with open(data_path(STATUS_FILE), "r", encoding="utf-8") as f:
                 return json.load(f)
         except Exception:
             return {}
     return {}
 
 def save_platform_status(status: Dict[str, Dict]):
-    with open(STATUS_FILE, "w", encoding="utf-8") as f:
+    with open(data_path(STATUS_FILE), "w", encoding="utf-8") as f:
         json.dump(status, f, indent=2, ensure_ascii=False)
 
 def update_platform_status(video_info: Dict, results: Dict[str, Tuple[bool, str]]):
@@ -228,7 +368,7 @@ def find_incomplete_video(config: Optional[Dict] = None) -> Optional[Tuple[Dict,
     return None
 
 def load_active_platforms() -> Dict[str, bool]:
-    path = "active_platforms.json"
+    path = data_path("active_platforms.json")
     default = {"youtube": True, "instagram": True, "x": True, "reddit": True}
     if os.path.exists(path):
         try:
@@ -295,9 +435,9 @@ PROFILE_FILE = "tiktok_profile.json"
 
 
 def _load_profile_cache() -> Dict[str, str]:
-    if os.path.exists(PROFILE_FILE):
+    if os.path.exists(data_path(PROFILE_FILE)):
         try:
-            with open(PROFILE_FILE, "r", encoding="utf-8") as f:
+            with open(data_path(PROFILE_FILE), "r", encoding="utf-8") as f:
                 data = json.load(f)
                 return data.get("sec_uid", {}) if isinstance(data, dict) else {}
         except Exception:
@@ -311,7 +451,7 @@ def _save_profile_cache(username: str, sec_uid: str):
         return
     cache[username] = sec_uid
     try:
-        with open(PROFILE_FILE, "w", encoding="utf-8") as f:
+        with open(data_path(PROFILE_FILE), "w", encoding="utf-8") as f:
             json.dump({"sec_uid": cache}, f, indent=2)
     except Exception:
         pass
@@ -419,7 +559,8 @@ def _listar_perfil(origen: str, count: int, clean_username: str) -> List[Dict]:
     return videos
 
 
-def fetch_latest_tiktok_videos(username: str, count: int = 40, config: Optional[Dict] = None) -> List[Dict]:
+def fetch_latest_tiktok_videos(username: str, count: int = 40, config: Optional[Dict] = None,
+                               own_account: bool = True) -> List[Dict]:
     """
     Obtiene los últimos videos del perfil de TikTok usando yt-dlp.
     Devuelve lista de dicts con id, title, webpage_url, upload_date, timestamp, thumbnail, duration.
@@ -427,6 +568,10 @@ def fetch_latest_tiktok_videos(username: str, count: int = 40, config: Optional[
     Se prueban dos rutas porque la de la URL del perfil falla a ratos y, cuando
     responde por la web, devuelve entradas SIN fecha, lo que impide saber que
     video es nuevo.
+
+    Con own_account=False (canal ajeno) no se usa la ruta por sec_uid: su
+    resolucion parte de TIKTOK_SEC_UID y de los videos propios ya procesados,
+    asi que devolveria el perfil del creador y no el del canal pedido.
     """
     clean_username = username.strip().replace("@", "")
     print(f"[SEARCH] Buscando los últimos {count} videos en TikTok @{clean_username}...")
@@ -435,7 +580,7 @@ def fetch_latest_tiktok_videos(username: str, count: int = 40, config: Optional[
     # (se deja fuera videos que si existen), mientras que la ruta por sec_uid
     # usa la API de la app y trae el perfil entero con fechas.
     intentos = []
-    sec_uid = resolve_tiktok_sec_uid(clean_username, config)
+    sec_uid = resolve_tiktok_sec_uid(clean_username, config) if own_account else None
     if sec_uid:
         intentos.append(("sec_uid del perfil", f"tiktokuser:{sec_uid}"))
     intentos.append(("url del perfil", f"https://www.tiktok.com/@{clean_username}"))
@@ -444,12 +589,22 @@ def fetch_latest_tiktok_videos(username: str, count: int = 40, config: Optional[
     # mismo perfil a todo el mundo: desde los runners de GitHub (EE.UU.) el
     # listado omitia videos que si se ven desde otras regiones, y por eso 2
     # videos se quedaron sin publicar. Basta con que una ruta vea el video.
+    # Un canal ajeno solo tiene la ruta de la URL del perfil, que TikTok corta
+    # por rachas con "Unable to extract secondary user ID": se reintenta.
+    reintentos = 1 if own_account else 3
+
     union: Dict[str, Dict] = {}
     for nombre, origen in intentos:
-        try:
-            videos = _listar_perfil(origen, count, clean_username)
-        except Exception as e:
-            print(f"[SEARCH] Ruta '{nombre}' fallida: {str(e)[:140]}")
+        videos = None
+        for intento in range(reintentos):
+            try:
+                videos = _listar_perfil(origen, count, clean_username)
+                break
+            except Exception as e:
+                print(f"[SEARCH] Ruta '{nombre}' fallida (intento {intento + 1}/{reintentos}): {str(e)[:140]}")
+                if intento + 1 < reintentos:
+                    time.sleep(4 * (intento + 1))
+        if videos is None:
             continue
         if not videos:
             print(f"[SEARCH] Ruta '{nombre}' no devolvio videos.")
@@ -717,20 +872,23 @@ def fetch_video_stats(webpage_url: str) -> Optional[Dict]:
     return None
 
 
-def list_known_videos(username: str, count: int = 8) -> List[Dict]:
+def list_known_videos(username: str, count: int = 8, own_account: bool = True) -> List[Dict]:
     """
     Videos candidatos a analizar. Primero el perfil de TikTok; si TikTok
     bloquea el listado (habitual desde IPs de datacenter y por cambios del
     extractor), se cae al historial local de platform_status.json, que ya
     guarda id, titulo y URL de todo lo que el robot proceso.
+
+    Con own_account=False (canal ajeno) no hay respaldo: el historial local es
+    de la cuenta propia y no debe mezclarse con el canal analizado.
     """
     try:
-        videos = fetch_latest_tiktok_videos(username, count=count)
+        videos = fetch_latest_tiktok_videos(username, count=count, own_account=own_account)
     except Exception as e:
         print(f"[STATS] No se pudo listar el perfil: {str(e)[:120]}")
         videos = []
 
-    if videos:
+    if videos or not own_account:
         return videos[:count]
 
     print("[STATS] Usando el historial local (platform_status.json) como fuente de videos.")
@@ -748,13 +906,14 @@ def list_known_videos(username: str, count: int = 8) -> List[Dict]:
     return locales[:count]
 
 
-def fetch_videos_with_stats(username: str, count: int = 8, on_progress=None) -> Dict:
+def fetch_videos_with_stats(username: str, count: int = 8, on_progress=None,
+                            own_account: bool = True) -> Dict:
     """
     Trae los ultimos `count` videos con sus metricas reales.
     Devuelve {"videos": [...], "failed": [...]} para que el dashboard pueda
     avisar con precision cuando TikTok bloquea la consulta de algun video.
     """
-    candidatos = list_known_videos(username, count=count)
+    candidatos = list_known_videos(username, count=count, own_account=own_account)
     total = len(candidatos)
     con_metricas: List[Dict] = []
     fallidos: List[Dict] = []
@@ -1438,7 +1597,7 @@ def crosspost_single_video(video_info: Dict, config: Optional[Dict] = None, only
         if step_summary_path:
             try:
                 with open(step_summary_path, "a", encoding="utf-8") as f:
-                    f.write(f"### ⚡ TikTok Crossposter: {title}\n\n")
+                    f.write(f"### ⚡ [{_ACTIVE_ACCOUNT.get('label', '')}] TikTok Crossposter: {title}\n\n")
                     f.write(f"- **Video ID:** `{video_id}`\n")
                     f.write(f"- **Resultado:** {'✅ Éxito' if success_count > 0 else '❌ Falló'}\n\n")
                     f.write("| Red Social | Estado | Detalle |\n| :--- | :---: | :--- |\n")
@@ -1628,14 +1787,128 @@ def run_crosspost_workflow(config: Optional[Dict] = None) -> Dict:
     print("[INFO] No hay videos nuevos ni pendientes en la cola.")
     return {"status": "skipped", "message": "No hay videos nuevos ni pendientes en cola que procesar."}
 
+# ==============================================================================
+# DESCARGA PARA DESGLOSE DE PRODUCCION (CANALES AJENOS)
+# ==============================================================================
+
+def download_for_breakdown(webpage_url: str) -> Dict:
+    """
+    Descarga un video (propio o ajeno) para que la IA lo vea y lo escuche, y
+    trae los datos de su sonido: nombre, autor y si es audio original o un
+    sonido reutilizado. A diferencia de la descarga del robot no espera minutos
+    a que pase un bloqueo: si TikWM no responde rapido se usa yt-dlp.
+
+    Devuelve {"path", "music_title", "music_author", "music_original", "error"}.
+    """
+    resultado = {"path": "", "music_title": "", "music_author": "",
+                 "music_original": None, "error": ""}
+    if not webpage_url:
+        resultado["error"] = "sin URL"
+        return resultado
+
+    data = None
+    for intento, (metodo, endpoint) in enumerate(TIKWM_RUTAS[:3]):
+        data, err = _tikwm_pedir(webpage_url, metodo, endpoint,
+                                 TIKWM_USER_AGENTS[intento % len(TIKWM_USER_AGENTS)])
+        if data:
+            break
+        resultado["error"] = err
+        time.sleep(3)
+
+    if data:
+        musica = data.get("music_info") or {}
+        resultado["music_title"] = (musica.get("title") or "").strip()
+        resultado["music_author"] = (musica.get("author") or "").strip()
+        if "original" in musica:
+            resultado["music_original"] = bool(musica.get("original"))
+
+        direct_url = data.get("play", "")
+        if not direct_url.startswith("http"):
+            direct_url = f"https://www.tikwm.com{direct_url}"
+        try:
+            temp_dir = tempfile.mkdtemp()
+            ruta = os.path.join(temp_dir, "video.mp4")
+            r = requests.get(direct_url, stream=True, timeout=60,
+                             headers={"User-Agent": TIKWM_USER_AGENTS[0]})
+            r.raise_for_status()
+            with open(ruta, "wb") as f:
+                for chunk in r.iter_content(chunk_size=65536):
+                    f.write(chunk)
+            if os.path.getsize(ruta) > 10000:
+                resultado["path"] = ruta
+                resultado["error"] = ""
+                return resultado
+            resultado["error"] = "archivo descargado vacio"
+        except Exception as e:
+            resultado["error"] = f"descarga TikWM: {str(e)[:100]}"
+
+    try:
+        ruta, _ = download_video_via_ytdlp({"webpage_url": webpage_url, "id": ""})
+        resultado["path"] = ruta
+        resultado["error"] = ""
+    except Exception as e:
+        resultado["error"] = (resultado["error"] + " | " if resultado["error"] else "") + \
+            f"yt-dlp: {str(e)[:100]}"
+    return resultado
+
+
+# ==============================================================================
+# ARRANQUE DEL ROBOT: UNA PASADA POR CUENTA
+# ==============================================================================
+
+def run_all_accounts(config_override: Optional[Dict] = None) -> Dict[str, Dict]:
+    """
+    Corre el flujo para cada cuenta activa, una tras otra. Si una cuenta falla,
+    las demas siguen: cada una tiene su propio estado y sus propias redes.
+    Con VIDEO_URL o FORCE_RUN solo se corre la cuenta de CROSSPOST_ACCOUNT
+    (por defecto la principal), para no publicar el mismo enlace en todas.
+    """
+    base = get_config() if config_override is None else config_override
+    unica = (base.get("CROSSPOST_ACCOUNT") or "").strip()
+    if not unica and (base.get("VIDEO_URL") or base.get("FORCE_RUN")):
+        unica = PRIMARY_ACCOUNT_ID
+
+    resultados: Dict[str, Dict] = {}
+    try:
+        for cuenta in load_accounts():
+            if unica and cuenta["id"] != unica:
+                continue
+            if not cuenta.get("enabled", True):
+                print(f"[ACCOUNT] {cuenta['id']}: desactivada, se salta.")
+                continue
+            set_active_account(cuenta["id"])
+            cfg = get_config()
+            print("\n" + "=" * 70)
+            print(f"[ACCOUNT] {cuenta['label']} ({cuenta['id']}) -> @{cfg.get('TIKTOK_USERNAME', '?').lstrip('@')}")
+            print("=" * 70)
+            if not cfg.get("TIKTOK_USERNAME"):
+                resultados[cuenta["id"]] = {"status": "skipped", "message": "Sin usuario de TikTok."}
+                continue
+            try:
+                resultados[cuenta["id"]] = run_crosspost_workflow(cfg)
+            except Exception as e:
+                print(f"[ACCOUNT] {cuenta['id']}: error inesperado: {e}")
+                resultados[cuenta["id"]] = {"status": "error", "message": str(e)}
+    finally:
+        set_active_account(PRIMARY_ACCOUNT_ID)
+    return resultados
+
+
 if __name__ == "__main__":
     print("[START] TikTok Crossposter con IA - Iniciando...")
     if len(sys.argv) > 1 and sys.argv[1].startswith("http"):
         print(f"[START] Argumento recibido: {sys.argv[1]}")
-        output = crosspost_from_url(sys.argv[1])
+        cuenta_arg = sys.argv[2] if len(sys.argv) > 2 else PRIMARY_ACCOUNT_ID
+        set_active_account(cuenta_arg)
+        salidas = {cuenta_arg: crosspost_from_url(sys.argv[1])}
     else:
-        output = run_crosspost_workflow()
-    print("\n[RESULT]", json.dumps(output, indent=2, ensure_ascii=False))
-    if output.get("status") in ["all_failed", "error"]:
-        print("\n[FAIL] Ninguna red social logró publicar el video. Revisa los tokens de las APIs.")
+        salidas = run_all_accounts()
+    print("\n[RESULT]", json.dumps(salidas, indent=2, ensure_ascii=False))
+
+    fallidas = [c for c, o in salidas.items() if o.get("status") in ("all_failed", "error")]
+    if fallidas:
+        print(f"\n[FAIL] Cuentas sin publicar nada: {', '.join(fallidas)}. Revisa sus tokens.")
+    # Solo se marca la corrida como fallida si fallaron TODAS: si una publico,
+    # hay que dejar que el workflow guarde su estado para no republicar.
+    if salidas and len(fallidas) == len(salidas):
         sys.exit(1)

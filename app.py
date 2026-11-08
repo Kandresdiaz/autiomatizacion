@@ -29,7 +29,15 @@ from tiktok_crossposter import (
     get_config,
     get_preview_play_url,
     fetch_videos_with_stats,
-    check_all_credentials
+    fetch_video_stats,
+    download_for_breakdown,
+    check_all_credentials,
+    load_accounts,
+    upsert_account,
+    set_active_account,
+    account_prefix,
+    data_path,
+    PRIMARY_ACCOUNT_ID
 )
 from ai_assistant import (
     detect_ai_provider,
@@ -40,6 +48,11 @@ from ai_assistant import (
     generate_monetization_plan,
     build_account_context,
     analyze_account_performance,
+    clone_channel_to_niche,
+    clone_channel_production,
+    breakdown_video,
+    gemini_key,
+    compute_performance_metrics,
     normalize_creator_profile
 )
 
@@ -190,7 +203,7 @@ def update_env_key(key: str, value: str):
 
 
 def load_active() -> dict:
-    path = "active_platforms.json"
+    path = data_path("active_platforms.json")
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8") as f:
@@ -200,7 +213,7 @@ def load_active() -> dict:
     return {"youtube": True, "instagram": True, "x": True, "reddit": True}
 
 def save_active(data: dict):
-    with open("active_platforms.json", "w", encoding="utf-8") as f:
+    with open(data_path("active_platforms.json"), "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
 CREATOR_PROFILE_FILE = "creator_profile.json"
@@ -212,9 +225,10 @@ def load_creator_profile() -> dict:
     de verdad. Sin esto la IA aconseja a un creador promedio (cadencia de
     manual, ganchos genericos, monetizacion de cuenta grande).
     """
-    if os.path.exists(CREATOR_PROFILE_FILE):
+    ruta = data_path(CREATOR_PROFILE_FILE)
+    if os.path.exists(ruta):
         try:
-            with open(CREATOR_PROFILE_FILE, "r", encoding="utf-8") as f:
+            with open(ruta, "r", encoding="utf-8") as f:
                 return normalize_creator_profile(json.load(f))
         except Exception:
             pass
@@ -223,16 +237,104 @@ def load_creator_profile() -> dict:
 
 def save_creator_profile(data: dict) -> dict:
     limpio = normalize_creator_profile(data)
-    with open(CREATOR_PROFILE_FILE, "w", encoding="utf-8") as f:
+    with open(data_path(CREATOR_PROFILE_FILE), "w", encoding="utf-8") as f:
         json.dump(limpio, f, indent=2, ensure_ascii=False)
     return limpio
 
 
-active_platforms = load_active()
-tiktok_user = os.getenv("TIKTOK_USERNAME", "@b00kevin")
-
 st.markdown('<div class="main-container">', unsafe_allow_html=True)
 st.title("🤖 TikTok Multi-Platform Command Center")
+
+# ==============================================================================
+# CUENTA ACTIVA: TODO LO DE ABAJO (ROBOT, PERFIL, ASESOR) ES DE ESTA CUENTA
+# ==============================================================================
+cuentas = load_accounts()
+ids_cuentas = [c["id"] for c in cuentas]
+if "_cuenta_pendiente" in st.session_state:
+    st.session_state["cuenta_activa"] = st.session_state.pop("_cuenta_pendiente")
+if st.session_state.get("cuenta_activa") not in ids_cuentas:
+    st.session_state["cuenta_activa"] = PRIMARY_ACCOUNT_ID
+
+col_cta1, col_cta2 = st.columns([3, 2])
+with col_cta1:
+    cuenta_id = st.selectbox(
+        "📂 Cuenta con la que trabajas",
+        ids_cuentas,
+        key="cuenta_activa",
+        format_func=lambda i: next(
+            (f"{c['label']}" + (f" ({c['tiktok_username']})" if c["tiktok_username"] else "")
+             for c in cuentas if c["id"] == i), i)
+    )
+with col_cta2:
+    with st.expander("➕ Crear otra cuenta"):
+        with st.form("form_nueva_cuenta", clear_on_submit=True):
+            n_label = st.text_input("Nombre para reconocerla", placeholder="Ej: Canal animado")
+            n_user = st.text_input("Usuario de TikTok (si ya la creaste)", placeholder="@mi_canal_animado")
+            if st.form_submit_button("Crear cuenta"):
+                if not n_label.strip():
+                    st.warning("Ponle un nombre.")
+                else:
+                    try:
+                        nueva = upsert_account(n_label, label=n_label.strip(), tiktok_username=n_user)
+                        st.session_state["_cuenta_pendiente"] = nueva["id"]
+                        st.rerun()
+                    except ValueError as e:
+                        st.warning(str(e))
+
+cuenta = set_active_account(cuenta_id)
+es_principal = cuenta["id"] == PRIMARY_ACCOUNT_ID
+
+# Al cambiar de cuenta se descartan los resultados de la anterior: un analisis
+# o un plan de @b00kevin no puede quedarse pegado en la cuenta nueva.
+if st.session_state.get("_cuenta_previa") != cuenta_id:
+    for clave in list(st.session_state.keys()):
+        if clave.startswith(("ai_", "clone_", "hooks_", "cred_check", "history_", "creator_profile",
+                             "precio_app", "meta_mes", "ctx_")):
+            del st.session_state[clave]
+    st.session_state["_cuenta_previa"] = cuenta_id
+
+cfg_cuenta = get_config()
+tiktok_user = cfg_cuenta.get("TIKTOK_USERNAME") or ("@b00kevin" if es_principal else "")
+active_platforms = load_active()
+
+if not es_principal:
+    pref = account_prefix(cuenta["id"])
+    with st.expander(f"⚙️ Ajustes de «{cuenta['label']}»: robot y redes de esta cuenta",
+                     expanded=not tiktok_user):
+        if not tiktok_user:
+            st.warning("Esta cuenta todavía no tiene usuario de TikTok. Créala en TikTok y escríbelo aquí: "
+                       "sin eso el robot no tiene qué publicar.")
+        c_aj1, c_aj2 = st.columns([2, 1])
+        with c_aj1:
+            user_cta = st.text_input("Usuario de TikTok de esta cuenta", value=cuenta["tiktok_username"],
+                                     key=f"user_cta_{cuenta['id']}")
+        with c_aj2:
+            robot_on = st.toggle("Robot activo para esta cuenta", value=cuenta.get("enabled", True),
+                                 key=f"robot_cta_{cuenta['id']}")
+        if user_cta.strip() != cuenta["tiktok_username"] or robot_on != cuenta.get("enabled", True):
+            upsert_account(cuenta["id"], tiktok_username=user_cta, enabled=robot_on)
+            st.toast("Cuenta actualizada.", icon="💾")
+            st.rerun()
+
+        st.markdown(
+            f"""
+**Para que el robot publique esta cuenta en SUS redes**, crea estos secrets en GitHub
+(Settings > Secrets and variables > Actions) o en tu `.env` local. Son los mismos de siempre
+pero con el prefijo **`{pref}_`**, y solo los de las redes que vayas a usar:
+
+| Red | Secrets |
+| --- | --- |
+| YouTube | `{pref}_YOUTUBE_CLIENT_ID`, `{pref}_YOUTUBE_CLIENT_SECRET`, `{pref}_YOUTUBE_REFRESH_TOKEN` |
+| Instagram | `{pref}_INSTAGRAM_USER_ID`, `{pref}_INSTAGRAM_ACCESS_TOKEN` |
+| X | `{pref}_X_API_KEY`, `{pref}_X_API_SECRET`, `{pref}_X_ACCESS_TOKEN`, `{pref}_X_ACCESS_TOKEN_SECRET` |
+| Reddit | `{pref}_REDDIT_CLIENT_ID`, `{pref}_REDDIT_CLIENT_SECRET`, `{pref}_REDDIT_USERNAME`, `{pref}_REDDIT_PASSWORD`, `{pref}_REDDIT_SUBREDDIT` |
+
+El token de YouTube del canal nuevo se saca con `python generate_youtube_token.py --cuenta {cuenta['id']}`
+(inicia sesión con la cuenta de Google del canal **nuevo**). Esta cuenta nunca usa las claves de la
+principal: si falta un secret, esa red simplemente queda sin publicar. Para que el robot la vea, sube
+`accounts.json` al repositorio.
+"""
+        )
 
 tab1, tab2, tab3 = st.tabs(["⚡ Panel Principal", "📅 Programador de Historial", "🧠 Asesor IA de Videos (Opcional)"])
 
@@ -338,10 +440,10 @@ with tab1:
         st.markdown('<div class="section-title">Canales de Publicación</div>', unsafe_allow_html=True)
         st.write("Selecciona las redes sociales donde publicar automáticamente:")
         
-        yt_active = st.checkbox("YouTube Shorts", value=active_platforms.get("youtube", True), key="t1_yt")
-        ig_active = st.checkbox("Instagram Reels", value=active_platforms.get("instagram", True), key="t1_ig")
-        x_active = st.checkbox("X (Twitter)", value=active_platforms.get("x", True), key="t1_x")
-        rd_active = st.checkbox("Reddit", value=active_platforms.get("reddit", True), key="t1_rd")
+        yt_active = st.checkbox("YouTube Shorts", value=active_platforms.get("youtube", True), key=f"t1_yt_{cuenta['id']}")
+        ig_active = st.checkbox("Instagram Reels", value=active_platforms.get("instagram", True), key=f"t1_ig_{cuenta['id']}")
+        x_active = st.checkbox("X (Twitter)", value=active_platforms.get("x", True), key=f"t1_x_{cuenta['id']}")
+        rd_active = st.checkbox("Reddit", value=active_platforms.get("reddit", True), key=f"t1_rd_{cuenta['id']}")
         
         new_active = {"youtube": yt_active, "instagram": ig_active, "x": x_active, "reddit": rd_active}
         if new_active != active_platforms:
@@ -377,9 +479,12 @@ with tab1:
         
         st.divider()
         st.markdown('<div class="section-title">Ajustes Rápidos</div>', unsafe_allow_html=True)
-        new_user = st.text_input("Usuario de TikTok:", value=tiktok_user, key="t1_user")
+        new_user = st.text_input("Usuario de TikTok:", value=tiktok_user, key=f"t1_user_{cuenta['id']}")
         if new_user != tiktok_user:
-            update_env_key("TIKTOK_USERNAME", new_user)
+            if es_principal:
+                update_env_key("TIKTOK_USERNAME", new_user)
+            else:
+                upsert_account(cuenta["id"], tiktok_username=new_user)
             st.toast("Usuario de TikTok actualizado.", icon="👤")
         st.markdown('</div>', unsafe_allow_html=True)
 
@@ -525,7 +630,9 @@ with tab2:
                     
                     for idx, vid in enumerate(selected_videos):
                         status_text.markdown(f"⏳ **[{idx+1}/{total}] Publicando:** {vid['title'][:50]}...")
-                        config = dict(os.environ)
+                        # Siempre la config de la cuenta activa: con os.environ una cuenta
+                        # nueva publicaria con las credenciales de la principal.
+                        config = get_config()
                         res = crosspost_single_video(vid, config)
                         
                         if res.get("status") in ["success", "partial_failure"]:
@@ -673,6 +780,20 @@ with tab3:
                         value=perfil.get("oferta", ""),
                         placeholder="Ej: una app que automatiza la facturación de negocios pequeños"
                     )
+                    f_produccion = st.radio(
+                        "¿Cómo se hacen los videos de esta cuenta?",
+                        options=["", "camara", "pantalla", "animado"],
+                        index=["", "camara", "pantalla", "animado"].index(perfil.get("produccion", "")),
+                        horizontal=True,
+                        format_func=lambda m: {
+                            "": "Sin definir",
+                            "camara": "🎥 Grabados con celular",
+                            "pantalla": "🖥️ Grabación de pantalla",
+                            "animado": "🎨 Animados (sin cara)"
+                        }[m],
+                        help="Con 'Animados' el asesor deja de proponerte grabarte o hablar a cámara: todo "
+                             "lo que propone son escenas, personajes, voz en off y edición."
+                    )
                     f_tools = st.text_input(
                         "Herramientas / stack que puedes mostrar en pantalla (opcional)",
                         value=perfil.get("herramientas", ""),
@@ -722,7 +843,8 @@ with tab3:
                         "followers": f_followers,
                         "videos_por_semana": f_por_semana,
                         "modo": f_modo,
-                        "modelo_negocio": f_modelo
+                        "modelo_negocio": f_modelo,
+                        "produccion": f_produccion
                     })
                     st.session_state["creator_profile"] = perfil
                     st.success("Perfil guardado. Todo lo que genere el asesor queda calibrado a esto.")
@@ -740,11 +862,12 @@ with tab3:
                 "para cualquier tema y la monetización va a sonar a cuenta grande. Llena el perfil de arriba."
             )
 
-        tab_analisis, tab_semana, tab_dinero, tab_guion = st.tabs([
+        tab_analisis, tab_semana, tab_dinero, tab_guion, tab_clonar = st.tabs([
             "🔎 Análisis de Rendimiento (Asesor Viral)",
             "📅 Estructura de la semana",
             "🚀 De las redes a mis apps",
-            "🎣 Ganchos & Guiones"
+            "🎣 Ganchos & Guiones",
+            "🧬 Clonar un canal viral"
         ])
 
         # ======================================================================
@@ -1123,6 +1246,264 @@ with tab3:
                         mime="text/markdown",
                         key="btn_dl_guion"
                     )
+
+        # ======================================================================
+        # 3.E - CLONAR LA PRODUCCION DE UN CANAL VIRAL EN OTRO NICHO
+        # ======================================================================
+        with tab_clonar:
+            st.markdown("#### Copia cómo están hechos los videos de un canal viral, en tu propio nicho")
+            st.caption(
+                "La IA **ve y escucha** los videos más virales del canal: escena por escena, cada corte, el "
+                "texto en pantalla, la voz, la música y los efectos. Con eso arma la receta de producción y la "
+                "plantilla segundo a segundo para tu canal nuevo. Se copia la forma, nunca el contenido."
+            )
+
+            tiene_gemini = bool(gemini_key())
+            if not tiene_gemini:
+                st.warning("⚠️ Para que la IA vea los videos hace falta **GEMINI_API_KEY** (Groq y OpenAI no "
+                           "aceptan video). Sin ella solo se analizan los textos y los números.")
+
+            col_c1, col_c2 = st.columns([1, 1])
+            with col_c1:
+                ref_user = st.text_input(
+                    "Canal viral de referencia (usuario de TikTok)",
+                    placeholder="@usuario_del_canal",
+                    key="clone_ref_user"
+                )
+                ref_urls = st.text_area(
+                    "…o pega los links de los videos que viste (uno por línea)",
+                    placeholder="https://www.tiktok.com/@usuario/video/123...",
+                    height=90,
+                    key="clone_urls",
+                    help="Si pegas links, se desglosan esos videos exactos. Si no, se toman los más vistos "
+                         "del canal de arriba."
+                )
+                cc1, cc2 = st.columns(2)
+                with cc1:
+                    n_ref = st.slider(
+                        "Videos a leer del canal",
+                        min_value=5, max_value=30, value=12,
+                        key="clone_n_videos",
+                        help="De estos se sacan los números y se eligen los más virales."
+                    )
+                with cc2:
+                    n_desglose = st.slider(
+                        "Videos a desglosar",
+                        min_value=1, max_value=5, value=3,
+                        key="clone_n_desglose",
+                        help="Los más vistos se descargan y la IA los ve completos. Cada uno tarda ~1 minuto."
+                    )
+                ref_obs = st.text_area(
+                    "Algo que notaste en sus videos (opcional)",
+                    placeholder="Ej: siempre usa el mismo sonido, no habla, todo es con texto y gestos...",
+                    height=70,
+                    key="clone_obs"
+                )
+            with col_c2:
+                st.caption(f"Se arma para la cuenta **{cuenta['label']}**, con su perfil. Cámbialo aquí "
+                           "si quieres probar otro nicho.")
+                nuevo_nicho = st.text_input(
+                    "Nicho del canal nuevo",
+                    value=perfil.get("nicho", ""),
+                    placeholder="Ej: historias animadas de terror cortas",
+                    key="clone_nicho"
+                )
+                nuevo_publico = st.text_input(
+                    "¿A quién le habla el canal nuevo?",
+                    value=perfil.get("publico", ""),
+                    placeholder="Ej: adolescentes que ven historias antes de dormir",
+                    key="clone_publico"
+                )
+                nueva_oferta = st.text_input(
+                    "¿Qué quieres monetizar con él? (opcional)",
+                    value=perfil.get("oferta", ""),
+                    placeholder="Ej: una app de planes de comida",
+                    key="clone_oferta"
+                )
+                nuevo_por_semana = st.slider(
+                    "Videos por semana del canal nuevo",
+                    min_value=1, max_value=70,
+                    value=int(perfil.get("videos_por_semana", 7)),
+                    key="clone_por_semana",
+                    help="La primera semana se reparte exactamente en estos slots, por tríos si alcanza."
+                )
+
+            if st.button("🧬 DESGLOSAR SUS VIDEOS Y ARMAR MI CANAL", key="btn_run_clone"):
+                ref_limpio = ref_user.strip().lstrip("@")
+                urls = [u.strip() for u in ref_urls.splitlines() if u.strip().startswith("http")]
+                objetivo = {
+                    "nicho": nuevo_nicho,
+                    "publico": nuevo_publico,
+                    "oferta": nueva_oferta,
+                    "videos_por_semana": nuevo_por_semana,
+                    "modo": perfil.get("modo", "sostenible"),
+                    "modelo_negocio": perfil.get("modelo_negocio", "apps_propias"),
+                    "produccion": perfil.get("produccion", ""),
+                    "herramientas": perfil.get("herramientas", ""),
+                }
+
+                if not ref_limpio and not urls:
+                    st.warning("Escribe el usuario del canal o pega al menos un link de video.")
+                elif not nuevo_nicho.strip():
+                    st.warning("Escribe el nicho del canal nuevo.")
+                else:
+                    for clave in ("clone_metrics", "clone_breakdowns", "clone_result"):
+                        st.session_state.pop(clave, None)
+                    st.session_state["clone_ref_name"] = ref_limpio or "videos"
+
+                    # 1. Números: del canal, o de los videos pegados.
+                    barra_c = st.progress(0.0, text="Leyendo los números...")
+
+                    def _avance_c(i, total, titulo):
+                        barra_c.progress(min(i / max(total, 1), 1.0) * 0.25,
+                                         text=f"Leyendo métricas {i}/{total}: {titulo[:45]}")
+
+                    if urls:
+                        videos_ref = []
+                        for i, u in enumerate(urls, start=1):
+                            _avance_c(i, len(urls), u)
+                            datos_v = fetch_video_stats(u)
+                            videos_ref.append(datos_v or {"webpage_url": u, "title": "", "views": 0})
+                        candidatos = videos_ref[:5]
+                    else:
+                        datos_ref = fetch_videos_with_stats(ref_limpio, count=n_ref,
+                                                            on_progress=_avance_c, own_account=False)
+                        videos_ref = datos_ref.get("videos", [])
+                        candidatos = sorted(videos_ref, key=lambda v: v.get("views") or 0,
+                                            reverse=True)[:n_desglose]
+
+                    metricas_ref = compute_performance_metrics([v for v in videos_ref if v.get("views")])
+                    metricas_ref["cadencia_semanal"] = ai_assistant._cadencia_referencia(videos_ref)
+                    st.session_state["clone_metrics"] = metricas_ref
+                    mediana_c = (metricas_ref.get("resumen") or {}).get("views_mediana") or 0
+
+                    if not candidatos:
+                        barra_c.empty()
+                        st.error(f"No se pudieron leer videos de @{ref_limpio}. Revisa que el usuario exista y "
+                                 "sea público. Si está bien, TikTok está bloqueando por rachas: espera unos "
+                                 "minutos, o pega directamente los links de los videos.")
+                    elif not tiene_gemini:
+                        barra_c.progress(0.6, text="Sin Gemini: analizando solo textos y números...")
+                        res_c = clone_channel_to_niche(videos_ref, reference_account=ref_limpio or "videos",
+                                                       target=objetivo, observations=ref_obs)
+                        barra_c.empty()
+                        if res_c.get("success"):
+                            st.session_state["clone_result"] = res_c.get("content")
+                        else:
+                            st.error(res_c.get("message"))
+                    else:
+                        # 2. Desglose: la IA ve y escucha cada video viral.
+                        desgloses = []
+                        for i, v in enumerate(candidatos, start=1):
+                            titulo_v = (v.get("title") or v.get("webpage_url", ""))[:40]
+                            barra_c.progress(0.25 + 0.6 * (i - 1) / len(candidatos),
+                                             text=f"Descargando y viendo el video {i}/{len(candidatos)}: {titulo_v}")
+                            meta = {
+                                "title": v.get("title", ""),
+                                "views": v.get("views") or 0,
+                                "veces_mediana": round((v.get("views") or 0) / mediana_c, 1) if mediana_c else None,
+                                "webpage_url": v.get("webpage_url", ""),
+                            }
+                            archivo = download_for_breakdown(meta["webpage_url"])
+                            meta.update({k: archivo[k] for k in ("music_title", "music_author", "music_original")})
+                            if not archivo["path"]:
+                                meta["error"] = f"No se pudo descargar: {archivo['error']}"
+                                desgloses.append(meta)
+                                continue
+                            res_v = breakdown_video(archivo["path"], meta)
+                            try:
+                                os.remove(archivo["path"])
+                            except OSError:
+                                pass
+                            if res_v.get("success"):
+                                meta["content"] = res_v["content"]
+                            else:
+                                meta["error"] = res_v.get("message")
+                            desgloses.append(meta)
+
+                        st.session_state["clone_breakdowns"] = desgloses
+
+                        # 3. Receta de producción para el nicho nuevo.
+                        barra_c.progress(0.9, text="Armando la receta de producción para tu nicho...")
+                        res_c = clone_channel_production(ref_limpio, metricas_ref, desgloses,
+                                                         objetivo, observations=ref_obs)
+                        barra_c.empty()
+                        if res_c.get("success"):
+                            st.session_state["clone_result"] = res_c.get("content")
+                            st.toast("¡Receta lista!", icon="🧬")
+                        else:
+                            st.error(res_c.get("message"))
+
+            clone_metrics = st.session_state.get("clone_metrics")
+            if clone_metrics and clone_metrics.get("videos"):
+                res_ref = clone_metrics.get("resumen", {})
+                mediana_ref = res_ref.get("views_mediana", 0) or 0
+                st.divider()
+                st.markdown(f"#### 📊 Los números de @{st.session_state.get('clone_ref_name', '')}")
+
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Videos leídos", res_ref.get("n", 0))
+                k2.metric("Mediana de vistas", f"{mediana_ref:,}".replace(",", "."))
+                k3.metric("Mejor video", f"{res_ref.get('views_max', 0):,}".replace(",", "."))
+                cad = clone_metrics.get("cadencia_semanal")
+                k4.metric("Publica por semana", cad if cad is not None else "—")
+
+                st.dataframe(
+                    [
+                        {
+                            "Video": (f["title"] or "(sin texto)")[:70],
+                            "Dur.": f"{f['duration']}s",
+                            "Vistas": f["views"],
+                            "x mediana": round(f["views"] / mediana_ref, 1) if mediana_ref else 0,
+                            "Coment.": f["comments"],
+                            "Comp.": f["shares"],
+                            "Engagement": f"{f['engagement']}%",
+                        }
+                        for f in clone_metrics["videos"]
+                    ],
+                    use_container_width=True,
+                    hide_index=True
+                )
+
+            desgloses_ok = st.session_state.get("clone_breakdowns") or []
+            if desgloses_ok:
+                st.divider()
+                st.markdown("#### 🎞️ Cómo está hecho cada video")
+                for i, d in enumerate(desgloses_ok, start=1):
+                    etiqueta = f"Video {i}: {(d.get('title') or '(sin texto)')[:60]}"
+                    if d.get("views"):
+                        etiqueta += f" — {d['views']:,} vistas".replace(",", ".")
+                    with st.expander(etiqueta):
+                        if d.get("webpage_url"):
+                            st.caption(d["webpage_url"])
+                        if d.get("music_title"):
+                            origen = {True: "audio original", False: "sonido reutilizado"}.get(
+                                d.get("music_original"), "")
+                            st.markdown(f"🎵 **Sonido:** {d['music_title']} — {d.get('music_author', '')}"
+                                        + (f" ({origen})" if origen else ""))
+                        if d.get("content"):
+                            st.markdown(d["content"])
+                        else:
+                            st.error(d.get("error") or "Sin desglose.")
+
+            if st.session_state.get("clone_result"):
+                st.divider()
+                st.markdown("#### 🧬 La receta, llevada a tu nicho")
+                st.markdown(st.session_state["clone_result"])
+                exportar = st.session_state["clone_result"]
+                if desgloses_ok:
+                    exportar += "\n\n---\n\n# Desglose de cada video\n\n" + "\n\n".join(
+                        f"## Video {i}: {d.get('title', '')[:80]}\n{d.get('webpage_url', '')}\n\n"
+                        f"{d.get('content') or d.get('error', '')}"
+                        for i, d in enumerate(desgloses_ok, start=1)
+                    )
+                st.download_button(
+                    "📥 Descargar la receta y los desgloses (.md)",
+                    data=exportar,
+                    file_name=f"receta_{st.session_state.get('clone_ref_name', 'canal')}.md",
+                    mime="text/markdown",
+                    key="btn_dl_clone"
+                )
 
     st.markdown('</div>', unsafe_allow_html=True)
 

@@ -18,6 +18,10 @@ Pasos previos en Google Cloud Console (https://console.cloud.google.com):
 Luego ejecuta:
     python generate_youtube_token.py
 
+Para el canal de una cuenta adicional de la app (multicuenta):
+    python generate_youtube_token.py --cuenta animado
+y los valores se guardan con el prefijo de esa cuenta (ANIMADO_YOUTUBE_...).
+
 Se abrira el navegador, inicias sesion con la cuenta DUENA del canal de YouTube,
 y el script imprime (y opcionalmente guarda en .env) el refresh token.
 """
@@ -27,6 +31,21 @@ import sys
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 ENV_FILE = ".env"
+
+
+def _prefijo_cuenta() -> str:
+    """'--cuenta animado' -> 'ANIMADO_'. Sin argumento: cuenta principal, sin prefijo."""
+    import re
+    if "--cuenta" in sys.argv:
+        i = sys.argv.index("--cuenta")
+        if i + 1 < len(sys.argv):
+            slug = re.sub(r"[^a-z0-9]+", "_", sys.argv[i + 1].strip().lower().lstrip("@")).strip("_")[:30]
+            if slug and slug != "principal":
+                return slug.upper() + "_"
+    return ""
+
+
+P = _prefijo_cuenta()
 
 
 def leer_env() -> dict:
@@ -81,8 +100,10 @@ def main() -> int:
         flow = InstalledAppFlow.from_client_secrets_file(archivo_json, SCOPES)
     else:
         # Opcion B: pegar Client ID y Secret a mano (o tomarlos del .env).
-        client_id = (env.get("YOUTUBE_CLIENT_ID") or "").strip()
-        client_secret = (env.get("YOUTUBE_CLIENT_SECRET") or "").strip()
+        # El cliente OAuth de Google Cloud se puede reutilizar entre canales:
+        # lo que cambia por canal es el refresh token.
+        client_id = (env.get(P + "YOUTUBE_CLIENT_ID") or env.get("YOUTUBE_CLIENT_ID") or "").strip()
+        client_secret = (env.get(P + "YOUTUBE_CLIENT_SECRET") or env.get("YOUTUBE_CLIENT_SECRET") or "").strip()
 
         print("[1/3] No encontre client_secret.json.")
         if client_id:
@@ -149,17 +170,17 @@ def main() -> int:
         print(f"      Aviso: no pude leer el canal ({str(e)[:120]}). El token de subida igual sirve.")
 
     print("\n" + "=" * 70)
-    print("YOUTUBE_CLIENT_ID     =", flow.client_config["client_id"])
-    print("YOUTUBE_CLIENT_SECRET =", flow.client_config["client_secret"])
-    print("YOUTUBE_REFRESH_TOKEN =", creds.refresh_token)
+    print(f"{P}YOUTUBE_CLIENT_ID     =", flow.client_config["client_id"])
+    print(f"{P}YOUTUBE_CLIENT_SECRET =", flow.client_config["client_secret"])
+    print(f"{P}YOUTUBE_REFRESH_TOKEN =", creds.refresh_token)
     print("=" * 70)
 
     resp = input("\nGuardar estos 3 valores en .env ahora? [S/n]: ").strip().lower()
     if resp in ("", "s", "si", "y", "yes"):
         guardar_en_env({
-            "YOUTUBE_CLIENT_ID": flow.client_config["client_id"],
-            "YOUTUBE_CLIENT_SECRET": flow.client_config["client_secret"],
-            "YOUTUBE_REFRESH_TOKEN": creds.refresh_token,
+            P + "YOUTUBE_CLIENT_ID": flow.client_config["client_id"],
+            P + "YOUTUBE_CLIENT_SECRET": flow.client_config["client_secret"],
+            P + "YOUTUBE_REFRESH_TOKEN": creds.refresh_token,
         })
         print(f"Guardado en {ENV_FILE}.")
     else:
@@ -167,7 +188,7 @@ def main() -> int:
 
     print("\nRecuerda actualizar tambien los Secrets de GitHub Actions:")
     print("  Settings > Secrets and variables > Actions >")
-    print("  YOUTUBE_CLIENT_ID / YOUTUBE_CLIENT_SECRET / YOUTUBE_REFRESH_TOKEN")
+    print(f"  {P}YOUTUBE_CLIENT_ID / {P}YOUTUBE_CLIENT_SECRET / {P}YOUTUBE_REFRESH_TOKEN")
     return 0
 
 

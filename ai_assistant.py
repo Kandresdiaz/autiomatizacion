@@ -124,6 +124,27 @@ MODELOS_NEGOCIO = {
     ),
 }
 
+# Como se fabrican los videos. Cambia lo que es "grabable": un canal animado
+# no tiene cara ni celular, tiene escenas, personajes y voz en off.
+TIPOS_PRODUCCION = {
+    "camara": (
+        "GRABADO CON CELULAR: el creador aparece o graba situaciones y objetos reales."
+    ),
+    "pantalla": (
+        "GRABACION DE PANTALLA: lo que se ve es software, apps o resultados en pantalla, con o sin la cara "
+        "del creador en una esquina."
+    ),
+    "animado": (
+        "CANAL ANIMADO, SIN CARA NI GRABACION REAL: todo se produce animado (personajes, ilustraciones, "
+        "fondos, animacion 2D/3D o generadores de imagen y video con IA), con voz en off o voz de IA, "
+        "musica y subtitulos. Esta regla MANDA sobre cualquier otra que hable de grabar con el celular, "
+        "mirar a camara o grabar pantalla: queda PROHIBIDO proponer 'grabate', 'habla a camara' o planos de "
+        "personas reales. Todo 'lo que se ve' se describe como una escena animada concreta (personaje, "
+        "fondo, accion, expresion), y todo plan de produccion habla de escenas a generar o animar, voces y "
+        "edicion, no de sesiones de grabacion."
+    ),
+}
+
 ETAPAS_CUENTA = [
     (0, 1000, "ARRANQUE (menos de 1.000 seguidores)",
      "Las vistas NO vienen de los seguidores, vienen del 'Para ti'. Queda PROHIBIDO aconsejar tacticas que "
@@ -160,6 +181,7 @@ DEFAULT_CREATOR_PROFILE: Dict[str, Any] = {
     "videos_por_semana": 7,
     "modo": "sostenible",
     "modelo_negocio": "apps_propias",
+    "produccion": "",
 }
 
 
@@ -185,6 +207,9 @@ def normalize_creator_profile(profile: Optional[Dict[str, Any]]) -> Dict[str, An
 
     if datos.get("modelo_negocio") not in MODELOS_NEGOCIO:
         datos["modelo_negocio"] = "apps_propias"
+
+    if datos.get("produccion") not in TIPOS_PRODUCCION:
+        datos["produccion"] = ""
 
     for clave in ("nicho", "publico", "oferta", "herramientas"):
         datos[clave] = str(datos.get(clave) or "").strip()
@@ -217,6 +242,8 @@ def build_creator_profile_block(profile: Optional[Dict[str, Any]]) -> str:
             lineas.append(
                 f"- Herramientas / stack que usa y puede mostrar en pantalla: {datos['herramientas']}"
             )
+        if datos["produccion"]:
+            lineas.append(f"- COMO SE HACEN LOS VIDEOS: {TIPOS_PRODUCCION[datos['produccion']]}")
         lineas.append(f"- Seguidores hoy: {datos['followers']} -> ETAPA {etapa}. {regla_etapa}")
     else:
         lineas.append("- El creador no declaro nicho ni oferta: no te lo inventes. Trabaja con el tema que "
@@ -395,16 +422,20 @@ def listar_modelos_gemini(api_key: str) -> List[Tuple[str, str]]:
     return encontrados
 
 
-def call_gemini(api_key: str, prompt: str, system_prompt: str = SYSTEM_PROMPT) -> str:
+def call_gemini(api_key: str, prompt: str, system_prompt: str = SYSTEM_PROMPT,
+                media_parts: Optional[List[Dict[str, Any]]] = None, timeout: int = 60) -> str:
     """
     Llama a Gemini probando los modelos que la clave tiene disponibles.
 
     Si un modelo responde 404 porque fue retirado, Google indica el reemplazo en
     el propio mensaje; ese reemplazo se encola como siguiente intento. Asi la
     proxima retirada de modelos no vuelve a tumbar la funcion.
+
+    media_parts permite mandar un video (inlineData) para que el modelo lo vea
+    y lo escuche, no solo el texto.
     """
     payload = {
-        "contents": [{"parts": [{"text": f"{system_prompt}\n\n{prompt}"}]}],
+        "contents": [{"parts": list(media_parts or []) + [{"text": f"{system_prompt}\n\n{prompt}"}]}],
         # El diagnostico del asesor son 6 secciones con tablas y los ganchos son
         # 10 bloques: 2048 se quedaba corto. Ademas los modelos nuevos gastan
         # parte del presupuesto de salida razonando.
@@ -430,7 +461,7 @@ def call_gemini(api_key: str, prompt: str, system_prompt: str = SYSTEM_PROMPT) -
         url = f"{GEMINI_API_BASE}/{version}/models/{model}:generateContent"
         try:
             resp = requests.post(url, params={"key": api_key}, headers=headers,
-                                 json=payload, timeout=60)
+                                 json=payload, timeout=timeout)
         except Exception as e:
             errores.append(f"{model}: {type(e).__name__}: {e}")
             continue
@@ -454,6 +485,14 @@ def call_gemini(api_key: str, prompt: str, system_prompt: str = SYSTEM_PROMPT) -
 
         cuerpo = resp.text[:200]
         errores.append(f"{model}: HTTP {resp.status_code} {cuerpo}")
+        partes = payload["contents"][0]["parts"]
+        if resp.status_code == 400 and "API key" not in resp.text and any("videoMetadata" in pt for pt in partes):
+            # Modelo que no acepta fijar los fps: mismo modelo, muestreo por defecto.
+            for pt in partes:
+                pt.pop("videoMetadata", None)
+            intentados.discard(model)
+            pendientes.insert(0, (version, model))
+            continue
         if resp.status_code == 503:
             sobrecargado = True
         if resp.status_code == 404:
@@ -1289,3 +1328,438 @@ def generate_monetization_plan(
     prompt = build_monetization_prompt(metrics, profile=profile, extra_context=extra_context,
                                        precio=precio, meta_mensual=meta_mensual)
     return run_ai_task(prompt, MONETIZATION_SYSTEM_PROMPT, config=config)
+
+
+# ==============================================================================
+# CLONAR UN CANAL VIRAL A OTRO NICHO
+# ==============================================================================
+# Mismo analisis numerico que para la cuenta propia, pero aplicado a un canal
+# ajeno que ya funciona. La IA no copia sus videos: extrae la formula (formatos
+# que se repiten, estructura de apertura, duracion, cadencia) y la traduce a un
+# nicho distinto, para un canal que arranca de cero.
+
+CLONE_SYSTEM_PROMPT = """Eres un estratega de contenido para video corto (TikTok, Reels, Shorts) especializado en ingenieria inversa de canales virales.
+Recibes las METRICAS REALES de un canal de referencia que ya funciona y el nicho de un canal NUEVO que va a arrancar de cero. Tu trabajo es separar la FORMULA del canal (lo que se puede trasladar) de su TEMA (lo que no), y reconstruir esa formula en el nicho nuevo.
+
+REGLAS DE ORO OBLIGATORIAS:
+1. FORMULA, NO CONTENIDO: se trasladan estructuras (como abre, como avanza, cuanto dura, que promesa hace, como se serializa), nunca textos, chistes, frases ni ideas concretas del canal original. Queda PROHIBIDO copiar descripciones o ganchos literales y PROHIBIDO proponer hacerse pasar por el creador original o usar su nombre o su imagen.
+2. TODA AFIRMACION LLEVA SU DATO: cada patron que nombres cita la cifra que lo sostiene (vistas, veces la mediana, duracion, cuantos videos lo usan). Un patron que aparece en 1 solo video no es formula: es un caso, y lo dices.
+3. SOLO VES EL TEXTO Y LOS NUMEROS: no ves los videos. Lo que deduzcas del formato visual a partir de la descripcion lo marcas como '(inferido del texto)'. Si el creador te describe lo que ve en los videos, eso manda sobre tu inferencia.
+4. LOS PICOS MANDAN: un canal viral se explica por sus videos que se disparan muy por encima de su mediana, no por su promedio. Analiza que tienen esos picos que el resto no.
+5. SEPARA LO QUE NO SE TRASLADA: audiencia acumulada, cara conocida, tendencia puntual, tema que solo funciona en ese nicho. Dilo explicitamente para que el canal nuevo no espere esos numeros por copiar la forma.
+6. LA TRADUCCION TIENE QUE SER NATURAL EN EL NICHO NUEVO: si un formato no tiene equivalente honesto en el nicho nuevo, lo descartas y dices por que. Nada de forzar.
+7. EL CANAL NUEVO EMPIEZA EN CERO: sus vistas vienen del 'Para ti', no de seguidores. Prohibido proponer tacticas que necesiten audiencia (lives, colaboraciones, pedir a los seguidores, marcas).
+8. RESPETA LA CADENCIA DECLARADA del canal nuevo: los primeros videos se reparten exactamente en los slots que te doy. Prohibido inventar otra frecuencia.
+9. CONCRETO Y GRABABLE: cada idea nombra algo que se puede ver, oir o medir en el nicho nuevo, y se puede grabar con un celular o una grabacion de pantalla. Cero sustantivos abstractos de coaching.
+10. ESPANOL NEUTRO, directo, en tablas. Cero relleno.
+"""
+
+
+def _cadencia_referencia(videos: List[Dict[str, Any]]) -> Optional[float]:
+    """Videos por semana que publica el canal de referencia, segun sus fechas."""
+    fechas = sorted(int(v.get("timestamp") or 0) for v in videos if v.get("timestamp"))
+    if len(fechas) < 2:
+        return None
+    dias = (fechas[-1] - fechas[0]) / 86400
+    if dias < 0.5:
+        return None
+    return round((len(fechas) - 1) / dias * 7, 1)
+
+
+def build_clone_output_spec(total_videos: int) -> str:
+    """Las secciones que se piden, con la primera semana ya dimensionada."""
+    trios, resto = divmod(total_videos, 3)
+    if trios >= 2:
+        bloque_videos = (
+            f"### 🎬 La primera semana del canal nuevo ({total_videos} videos)\n"
+            f"Son {trios} ideas de 3 ejecuciones cada una"
+            + (f" (los {resto} video(s) que sobran van a la idea mas prometedora)" if resto else "")
+            + ". Cada idea sale de un formato de la tabla de traduccion. Por cada idea:\n"
+            "**Idea N — [formato del que sale]: la idea en concreto**\n"
+            "| | Gancho del segundo 0 (frase exacta) | Que se ve en pantalla | Dur. |\n"
+            "| A | | | |\n| B | | | |\n| C | | | |\n"
+            "Las 3 cuentan lo mismo y cambian solo la apertura, para saber si fallo la idea o fallo el gancho."
+        )
+    else:
+        bloque_videos = (
+            f"### 🎬 La primera semana del canal nuevo ({total_videos} videos)\n"
+            "Tabla: | # | Formato del que sale | Idea concreta | Gancho del segundo 0 (frase exacta) | "
+            "Que se ve en pantalla | Dur. |"
+        )
+
+    return f"""ENTREGA TU RESPUESTA EXACTAMENTE CON ESTAS SECCIONES EN MARKDOWN:
+
+### 🧬 La formula del canal en 3 lineas
+Que hace este canal que le funciona, con la cifra que lo sostiene. Si la muestra es pequena o los numeros son irregulares, dilo aqui.
+
+### 🚀 Los videos que se dispararon y por que
+Tabla con sus picos: | Video (texto) | Vistas | Veces la mediana | Que tiene que el resto no |
+
+### 🔁 Los formatos que repite
+Solo los que aparecen en varios videos o explican un pico (maximo 5):
+| Formato | Como esta armado (apertura -> desarrollo -> cierre) | Cuantos videos lo usan | Vistas promedio | Dur. tipica |
+
+### 🧱 Lo que NO se traslada
+Lo que explica sus numeros pero el canal nuevo no va a tener (audiencia, persona, tendencia, tema). Una linea por punto.
+
+### 🔀 La traduccion al nicho nuevo
+Una fila por formato de arriba: | Formato original | Version en el nicho nuevo | Ejemplo concreto de un video | Por que le sirve a este publico |
+Si un formato no tiene traduccion honesta, la fila dice 'descartado' y el motivo.
+
+### 🪪 El canal nuevo
+- 3 opciones de nombre de usuario (cortos, que digan el nicho, que no se parezcan al canal original).
+- Bio de maximo 80 caracteres que diga que va a encontrar quien entre al perfil.
+- La promesa que tiene que quedar clara en los primeros 9 videos del perfil.
+
+{bloque_videos}
+
+### 📊 Como saber en 2 semanas si la formula se traslado
+2 o 3 numeros con su meta. El canal nuevo empieza en cero: no lo compares con las vistas del original; mide cuantos videos superan un umbral de vistas realista para una cuenta nueva y que formato los produjo. Di que hacer si ningun formato pasa el umbral."""
+
+
+def build_clone_prompt(metrics: Dict[str, Any], reference_account: str,
+                       target: Dict[str, Any], observations: str = "",
+                       cadencia: Optional[float] = None) -> str:
+    """Datos del canal de referencia + perfil del canal nuevo."""
+    resumen = metrics.get("resumen", {})
+    filas = metrics.get("videos", [])
+    mediana = resumen.get("views_mediana", 0) or 0
+
+    nuevo = normalize_creator_profile({**target, "followers": 0})
+
+    lineas = [
+        f"CANAL DE REFERENCIA (ya viral): @{reference_account.strip().lstrip('@')}",
+        f"- Videos analizados: {resumen.get('n', 0)}",
+        f"- Vistas: promedio {resumen.get('views_promedio', 0)}, mediana {mediana}, "
+        f"mejor {resumen.get('views_max', 0)}, peor {resumen.get('views_min', 0)}",
+        f"- Engagement promedio: {resumen.get('engagement_promedio', 0)}% "
+        f"(comentarios {resumen.get('comment_rate_promedio', 0)}%, compartidos {resumen.get('share_rate_promedio', 0)}%)",
+        f"- Duracion promedio: {resumen.get('duracion_promedio', 0)}s",
+        f"- Cadencia observada: {cadencia} videos por semana" if cadencia is not None
+        else "- Cadencia observada: sin fechas suficientes para calcularla",
+        "",
+        "DETALLE VIDEO POR VIDEO (del mas reciente al mas antiguo):",
+        "| # | Texto / descripcion del video | Dur. | Publicado | Vistas | x mediana | Likes | Coment. | Comp. | Engagement |",
+        "| - | - | - | - | - | - | - | - | - | - |",
+    ]
+    for i, f in enumerate(filas, start=1):
+        veces = round(f["views"] / mediana, 1) if mediana else 0
+        titulo = f["title"].replace("|", "/").replace("\n", " ")[:120]
+        lineas.append(
+            f"| {i} | {titulo} | {f['duration']}s | {f['fecha']} ({f['dia']}) | {f['views']} | {veces}x | "
+            f"{f['likes']} | {f['comments']} | {f['shares']} | {f['engagement']}% |"
+        )
+
+    for titulo, clave in (("COMPARATIVA POR DURACION:", "por_duracion"),
+                          ("COMPARATIVA POR FRANJA HORARIA:", "por_franja")):
+        datos = metrics.get(clave) or {}
+        if datos:
+            lineas += ["", titulo]
+            for etiqueta, d in sorted(datos.items(), key=lambda kv: kv[1]["views_promedio"], reverse=True):
+                lineas.append(f"- {etiqueta}: {d['n']} video(s), {d['views_promedio']} vistas promedio, "
+                              f"{d['engagement_promedio']}% engagement")
+
+    if observations.strip():
+        lineas += ["", "LO QUE EL CREADOR VE EN LOS VIDEOS DE ESE CANAL (manda sobre tu inferencia): "
+                   + observations.strip()]
+
+    lineas += [
+        "",
+        "CANAL NUEVO A CONSTRUIR (arranca con 0 seguidores):",
+        build_creator_profile_block(nuevo),
+        "",
+        build_clone_output_spec(nuevo["videos_por_semana"]),
+    ]
+    return "\n".join(lineas)
+
+
+def clone_channel_to_niche(
+    videos: List[Dict[str, Any]],
+    reference_account: str,
+    target: Dict[str, Any],
+    observations: str = "",
+    config: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """
+    Extrae la formula de un canal viral ajeno y la reconstruye en otro nicho.
+    Devuelve siempre las metricas calculadas, aunque la IA falle.
+    """
+    metrics = compute_performance_metrics(videos)
+    if not metrics["videos"]:
+        return {
+            "success": False,
+            "provider": None,
+            "message": ("No hay videos con metricas de ese canal. Revisa el usuario o reintenta en unos "
+                        "minutos (TikTok bloquea las consultas por rachas)."),
+            "content": None,
+            "metrics": metrics,
+        }
+
+    metrics["cadencia_semanal"] = _cadencia_referencia(videos)
+    prompt = build_clone_prompt(metrics, reference_account, target, observations,
+                                cadencia=metrics["cadencia_semanal"])
+    resultado = run_ai_task(prompt, CLONE_SYSTEM_PROMPT, config=config)
+    resultado["metrics"] = metrics
+    return resultado
+
+
+# ==============================================================================
+# DESGLOSE DE PRODUCCION: LA IA VE Y ESCUCHA LOS VIDEOS VIRALES
+# ==============================================================================
+# El clon por texto solo ve descripciones y numeros. Para copiar COMO esta hecho
+# un video (planos, cortes, texto en pantalla, voz, musica, efectos) el modelo
+# tiene que ver el video. Gemini acepta video con audio; los demas proveedores
+# no, por eso esta parte exige GEMINI_API_KEY.
+
+import base64
+import time as _time
+
+# Por encima de esto el video no cabe en la peticion (limite de 20 MB con el
+# base64) y se sube por la File API.
+_MAX_INLINE_BYTES = 14 * 1024 * 1024
+
+# Fotogramas por segundo que mira el modelo. Por defecto Gemini mira 1 por
+# segundo y se le escapan los cortes rapidos, que es justo lo que se analiza.
+_FPS_DESGLOSE = 3
+
+BREAKDOWN_SYSTEM_PROMPT = """Eres un editor y director de video corto (TikTok, Reels, Shorts) que hace ingenieria inversa de videos virales.
+Ves y escuchas UN video y lo desglosas con precision de produccion, para que otra persona pueda recrear la misma forma con otro tema.
+
+REGLAS:
+1. DESCRIBE LO QUE VES Y OYES, NO LO QUE SUPONES: tiempos reales en segundos, frases reales, textos en pantalla reales. Si algo no se distingue, dilo.
+2. CUENTA LOS CORTES: un corte es cada cambio de plano (salto de camara, cambio de encuadre, cambio de toma). Un zoom digital dentro del mismo plano no es corte, pero lo anotas.
+3. EL AUDIO SON CAPAS: voz (a camara, en off, voz de IA), musica (cual, si es reconocible, y en que momentos sube o baja), efectos de sonido (whoosh, pop, risas, silencios) y su sincronia con los cortes.
+4. NADA DE ELOGIOS: no digas 'excelente edicion' ni 'muy creativo'. Di que hace y en que segundo.
+5. ESPANOL NEUTRO, en tablas.
+"""
+
+BREAKDOWN_OUTPUT_SPEC = """ENTREGA EXACTAMENTE ESTO EN MARKDOWN:
+
+**Gancho (0-3s):** que se ve en el primer fotograma, que se dice o se oye, y que texto aparece. Por que obliga a quedarse.
+
+**Escena por escena:**
+| Tiempo | Plano / encuadre | Que pasa | Texto en pantalla | Audio (voz / musica / efecto) | Como entra el siguiente plano |
+Una fila por plano.
+
+**Ritmo:** numero total de cortes, segundos promedio por plano, y donde se acelera o se frena.
+
+**Audio:** tipo de voz, musica (nombre si se reconoce, si es sonido en tendencia o propio), efectos de sonido y en que segundos, y si el audio va sincronizado con los cortes.
+
+**Edicion y look:** subtitulos (estilo, posicion, si van palabra por palabra), zooms, transiciones, color, b-roll, stickers o graficos.
+
+**Estructura:** el esqueleto del video en 3 a 5 pasos (por ejemplo: problema absurdo -> silencio -> solucion obvia -> mirada a camara).
+
+**Cierre:** como termina y si hace loop con el inicio.
+
+**Como se grabo:** camara (celular / pantalla / camara fija), locacion, cuantas personas, y minutos estimados de grabacion y de edicion."""
+
+
+def _gemini_subir_archivo(api_key: str, ruta: str, mime: str = "video/mp4") -> Dict[str, Any]:
+    """Sube el video por la File API y espera a que quede listo para usarse."""
+    tamano = os.path.getsize(ruta)
+    inicio = requests.post(
+        f"{GEMINI_API_BASE}/upload/v1beta/files",
+        params={"key": api_key},
+        headers={
+            "X-Goog-Upload-Protocol": "resumable",
+            "X-Goog-Upload-Command": "start",
+            "X-Goog-Upload-Header-Content-Length": str(tamano),
+            "X-Goog-Upload-Header-Content-Type": mime,
+            "Content-Type": "application/json",
+        },
+        json={"file": {"display_name": os.path.basename(ruta)}},
+        timeout=30,
+    )
+    url_subida = inicio.headers.get("x-goog-upload-url")
+    if not url_subida:
+        raise RuntimeError(f"La File API no dio URL de subida (HTTP {inicio.status_code}).")
+
+    with open(ruta, "rb") as f:
+        subida = requests.post(
+            url_subida,
+            headers={"Content-Length": str(tamano), "X-Goog-Upload-Offset": "0",
+                     "X-Goog-Upload-Command": "upload, finalize"},
+            data=f, timeout=300,
+        )
+    archivo = (subida.json() or {}).get("file") or {}
+    if not archivo.get("uri"):
+        raise RuntimeError(f"Subida fallida (HTTP {subida.status_code}): {subida.text[:150]}")
+
+    for _ in range(30):
+        if archivo.get("state") in (None, "ACTIVE"):
+            break
+        if archivo.get("state") == "FAILED":
+            raise RuntimeError("Gemini no pudo procesar el video subido.")
+        _time.sleep(2)
+        archivo = requests.get(f"{GEMINI_API_BASE}/v1beta/{archivo['name']}",
+                               params={"key": api_key}, timeout=20).json()
+
+    return {"fileData": {"mimeType": mime, "fileUri": archivo["uri"]}}
+
+
+def _parte_video(api_key: str, ruta: str) -> Dict[str, Any]:
+    """El video como parte de la peticion: inline si cabe, File API si no."""
+    if os.path.getsize(ruta) <= _MAX_INLINE_BYTES:
+        with open(ruta, "rb") as f:
+            datos = base64.b64encode(f.read()).decode("ascii")
+        parte = {"inlineData": {"mimeType": "video/mp4", "data": datos}}
+    else:
+        parte = _gemini_subir_archivo(api_key, ruta)
+    parte["videoMetadata"] = {"fps": _FPS_DESGLOSE}
+    return parte
+
+
+def gemini_key(config: Optional[Dict[str, str]] = None) -> Optional[str]:
+    """La clave de Gemini, si existe. Es el unico proveedor que ve video."""
+    return (config or get_env_config()).get("GEMINI_API_KEY") or None
+
+
+def breakdown_video(video_path: str, meta: Dict[str, Any],
+                    config: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
+    """Gemini ve y escucha un video y devuelve su desglose de produccion."""
+    api_key = gemini_key(config)
+    if not api_key:
+        return {"success": False, "content": None,
+                "message": "Para ver los videos hace falta GEMINI_API_KEY (Groq y OpenAI no aceptan video)."}
+
+    contexto = [
+        "Desglosa este video.",
+        f"- Texto que lo acompana en TikTok: {(meta.get('title') or '(sin texto)')[:200]}",
+    ]
+    if meta.get("views"):
+        contexto.append(f"- Vistas: {meta['views']}"
+                        + (f" ({meta['veces_mediana']}x la mediana del canal)" if meta.get("veces_mediana") else ""))
+    if meta.get("music_title"):
+        tipo = {True: "audio original del creador", False: "sonido reutilizado de otro video"}.get(
+            meta.get("music_original"), "origen no confirmado")
+        contexto.append(f"- Sonido segun TikTok: '{meta['music_title']}' de {meta.get('music_author') or '?'} ({tipo})")
+
+    try:
+        parte = _parte_video(api_key, video_path)
+        texto = call_gemini(api_key, "\n".join(contexto) + "\n\n" + BREAKDOWN_OUTPUT_SPEC,
+                            BREAKDOWN_SYSTEM_PROMPT, media_parts=[parte], timeout=180)
+        return {"success": True, "provider": "gemini", "content": texto}
+    except Exception as e:
+        return {"success": False, "provider": "gemini", "content": None,
+                "message": f"Gemini no pudo ver el video: {str(e)[:300]}"}
+
+
+PRODUCTION_CLONE_SYSTEM_PROMPT = """Eres un director de contenido para video corto que monta canales nuevos copiando la PRODUCCION de canales virales, no su tema.
+Recibes el desglose plano por plano de varios videos virales de un canal (hecho viendo y escuchando los videos), sus numeros reales, y el nicho de un canal NUEVO que arranca de cero.
+
+REGLAS DE ORO:
+1. SE COPIA LA FORMA, NO EL CONTENIDO: estructura, ritmo de cortes, tipo de planos, capas de audio, estilo de texto en pantalla, duracion, cierre. Prohibido copiar frases, chistes o ideas concretas, y prohibido hacerse pasar por el creador original o usar su nombre o imagen.
+2. UN RECURSO ES RECETA SOLO SI SE REPITE: lo que aparece en varios de los videos desglosados es receta; lo que sale en uno solo es un caso, y lo dices.
+3. CITA EL VIDEO Y EL SEGUNDO: cada elemento de la receta dice en que video(s) aparece y en que momento.
+4. AUDIO CON CUIDADO: si usan un sonido en tendencia o una cancion, di que se usa el sonido desde la biblioteca de TikTok (no descargarlo y volver a subirlo) y que alternativa usar si ese sonido no encaja en el nicho nuevo. Si es audio original (su voz), di como se reproduce la misma forma con voz propia.
+5. SEPARA LO QUE NO SE TRASLADA: cara conocida, carisma personal, audiencia acumulada, tendencia del momento.
+6. TODO PRODUCIBLE CON LO QUE HAY: celular, grabacion de pantalla y una app de edicion comun (CapCut o similar); o, si el perfil dice que el canal es ANIMADO, herramientas de animacion o de imagen y video con IA y voz en off o voz de IA. Si el canal de referencia esta grabado y el nuevo es animado (o al reves), traduces cada plano a su equivalente. Si la receta exige algo mas, dilo y da la version barata.
+7. EL CANAL NUEVO EMPIEZA EN CERO: nada de tacticas que necesiten audiencia. Respeta exactamente los videos por semana declarados.
+8. ESPANOL NEUTRO, directo, en tablas. Cero relleno.
+"""
+
+
+def _bloque_primera_semana(total_videos: int) -> str:
+    """La primera semana del canal nuevo, dimensionada a los slots declarados."""
+    trios, resto = divmod(total_videos, 3)
+    if trios >= 2:
+        return (
+            f"### 🎬 La primera semana del canal nuevo ({total_videos} videos)\n"
+            f"Son {trios} ideas de 3 ejecuciones cada una"
+            + (f" (los {resto} video(s) que sobran van a la idea mas prometedora)" if resto else "")
+            + ". Todas usan la plantilla de arriba. Por cada idea:\n"
+            "**Idea N: la idea en concreto**\n"
+            "| | Gancho del segundo 0 (frase exacta) | Primer plano que se ve | Audio | Dur. |\n"
+            "| A | | | | |\n| B | | | | |\n| C | | | | |\n"
+            "Las 3 cuentan lo mismo y cambian solo la apertura, para saber si fallo la idea o fallo el gancho."
+        )
+    return (
+        f"### 🎬 La primera semana del canal nuevo ({total_videos} videos)\n"
+        "Tabla: | # | Idea concreta | Gancho del segundo 0 (frase exacta) | Primer plano que se ve | Audio | Dur. |"
+    )
+
+
+def build_production_clone_prompt(reference_account: str, metrics: Optional[Dict[str, Any]],
+                                  breakdowns: List[Dict[str, Any]], target: Dict[str, Any],
+                                  observations: str = "") -> str:
+    """Desgloses de los videos virales + numeros + perfil del canal nuevo."""
+    nuevo = normalize_creator_profile({**target, "followers": 0})
+    resumen = (metrics or {}).get("resumen", {})
+
+    partes = [f"CANAL DE REFERENCIA: @{reference_account.strip().lstrip('@')}" if reference_account
+              else "VIDEOS DE REFERENCIA (pegados por el creador)"]
+    if resumen:
+        partes.append(
+            f"- Sobre {resumen.get('n', 0)} videos recientes: mediana {resumen.get('views_mediana', 0)} vistas, "
+            f"mejor {resumen.get('views_max', 0)}, duracion promedio {resumen.get('duracion_promedio', 0)}s, "
+            f"engagement {resumen.get('engagement_promedio', 0)}%."
+        )
+        if (metrics or {}).get("cadencia_semanal") is not None:
+            partes.append(f"- Publica {metrics['cadencia_semanal']} videos por semana.")
+
+    for i, b in enumerate(breakdowns, start=1):
+        cabecera = f"VIDEO {i}: \"{(b.get('title') or '(sin texto)')[:100]}\""
+        if b.get("views"):
+            cabecera += f" — {b['views']} vistas"
+            if b.get("veces_mediana"):
+                cabecera += f" ({b['veces_mediana']}x la mediana)"
+        if b.get("music_title"):
+            cabecera += f" — sonido: '{b['music_title']}'"
+        partes += ["", "=" * 60, cabecera, b.get("content") or "(sin desglose)"]
+
+    if observations.strip():
+        partes += ["", "LO QUE EL CREADOR NOTA EN ESOS VIDEOS: " + observations.strip()]
+
+    partes += [
+        "",
+        "CANAL NUEVO A CONSTRUIR (arranca con 0 seguidores):",
+        build_creator_profile_block(nuevo),
+        "",
+        f"""ENTREGA TU RESPUESTA EXACTAMENTE CON ESTAS SECCIONES EN MARKDOWN:
+
+### 🎬 La receta de produccion
+Lo que se repite en los videos desglosados:
+| Elemento | Como lo hacen | En que videos (y segundo) |
+Filas obligatorias: gancho visual del segundo 0, tipo de planos y encuadre, ritmo (segundos por plano y cortes totales), texto en pantalla / subtitulos, voz, musica o sonido, efectos de sonido, transiciones y zooms, duracion, cierre / loop.
+
+### 🔊 El audio, capa por capa
+Que suena, cuando, y como lo replica el canal nuevo (sonido de la biblioteca, voz propia, efectos). Si el sonido original no encaja con el nicho nuevo, la alternativa.
+
+### 🧱 Lo que NO se traslada
+Una linea por punto.
+
+### 🧩 La plantilla para tu nicho, segundo a segundo
+El molde de video que el canal nuevo repite, con un ejemplo real del nicho nuevo:
+| Tiempo | Que se ve (plano) | Que se dice | Texto en pantalla | Audio | Corte / transicion |
+
+### 🎥 Como grabarlo y editarlo
+Equipo, locacion, pasos en la app de edicion (con los nombres de las funciones: subtitulos automaticos, zoom, cortes de silencio, etc.), y minutos por video. Como grabar en lote los videos de la semana.
+
+### 🪪 El canal nuevo
+- 3 opciones de nombre de usuario (cortos, que digan el nicho, que no se parezcan al canal original).
+- Bio de maximo 80 caracteres.
+- Lo que tiene que quedar claro en los primeros 9 videos del perfil.
+
+{_bloque_primera_semana(nuevo['videos_por_semana'])}
+
+### 📊 Como saber en 2 semanas si la receta funciono
+2 o 3 numeros con meta realista para una cuenta nueva (no compares con las vistas del original). Y que elemento de la receta cambiar primero si no llega.""",
+    ]
+    return "\n".join(partes)
+
+
+def clone_channel_production(
+    reference_account: str,
+    metrics: Optional[Dict[str, Any]],
+    breakdowns: List[Dict[str, Any]],
+    target: Dict[str, Any],
+    observations: str = "",
+    config: Optional[Dict[str, str]] = None
+) -> Dict[str, Any]:
+    """Junta los desgloses en una receta de produccion para el nicho nuevo."""
+    utiles = [b for b in breakdowns if b.get("content")]
+    if not utiles:
+        return {"success": False, "content": None,
+                "message": "No hay ningun video desglosado para armar la receta."}
+    prompt = build_production_clone_prompt(reference_account, metrics, utiles, target, observations)
+    return run_ai_task(prompt, PRODUCTION_CLONE_SYSTEM_PROMPT, config=config)
