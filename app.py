@@ -1293,6 +1293,14 @@ with tab3:
                         key="clone_n_desglose",
                         help="Los más vistos se descargan y la IA los ve completos. Cada uno tarda ~1 minuto."
                     )
+                ref_animado = st.checkbox(
+                    "🎨 Los videos de referencia son animados",
+                    value=perfil.get("produccion") == "animado",
+                    key="clone_ref_animado",
+                    help="La IA mira el doble de fotogramas por segundo y desglosa también la animación: "
+                         "técnica, estilo, personajes, movimiento, cámara, fondos y herramienta probable. "
+                         "Gasta más cuota de Gemini."
+                )
                 ref_obs = st.text_area(
                     "Algo que notaste en sus videos (opcional)",
                     placeholder="Ej: siempre usa el mismo sonido, no habla, todo es con texto y gestos...",
@@ -1410,7 +1418,7 @@ with tab3:
                                 meta["error"] = f"No se pudo descargar: {archivo['error']}"
                                 desgloses.append(meta)
                                 continue
-                            res_v = breakdown_video(archivo["path"], meta)
+                            res_v = breakdown_video(archivo["path"], meta, animated=ref_animado)
                             try:
                                 os.remove(archivo["path"])
                             except OSError:
@@ -1426,7 +1434,8 @@ with tab3:
                         # 3. Receta de producción para el nicho nuevo.
                         barra_c.progress(0.9, text="Armando la receta de producción para tu nicho...")
                         res_c = clone_channel_production(ref_limpio, metricas_ref, desgloses,
-                                                         objetivo, observations=ref_obs)
+                                                         objetivo, observations=ref_obs,
+                                                         animated_reference=ref_animado)
                         barra_c.empty()
                         if res_c.get("success"):
                             st.session_state["clone_result"] = res_c.get("content")

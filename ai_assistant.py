@@ -1521,6 +1521,25 @@ _MAX_INLINE_BYTES = 14 * 1024 * 1024
 # Fotogramas por segundo que mira el modelo. Por defecto Gemini mira 1 por
 # segundo y se le escapan los cortes rapidos, que es justo lo que se analiza.
 _FPS_DESGLOSE = 3
+# En animacion los movimientos cortos (un parpadeo, un rebote, una pose que
+# cambia) duran menos de un tercio de segundo: a 3 fps se pierden.
+_FPS_DESGLOSE_ANIMADO = 6
+
+ANIMATION_BREAKDOWN_SPEC = """
+
+**🎨 Como esta animado** (es un video animado: esta seccion es obligatoria y va con el mismo detalle que el resto):
+| Aspecto | Lo que se ve (con segundos de ejemplo) |
+Filas obligatorias:
+- Tecnica: 2D, 3D, generado con IA (imagen o video), recortes / cutout, pizarra, stop motion, o mezcla. Di que rasgos lo delatan.
+- Estilo visual: trazo y grosor de linea, sombreado (plano, degradado, ninguno), paleta de colores dominante, nivel de detalle.
+- Personajes: como estan disenados (proporciones, ojos, cabeza), si se repiten entre escenas, cuantas expresiones o poses distintas hay.
+- Boca y voz: si la boca se mueve sincronizada con la voz, si abre y cierra sin sincronia, o si no se mueve.
+- Movimiento: animacion fluida (muchos dibujos por segundo) o limitada (pocas poses que cambian de golpe, partes que se mueven sobre un cuerpo fijo). Cuanto se mueve de verdad y cuanto es una imagen quieta.
+- Camara virtual: zoom o paneo sobre una imagen fija, efecto de profundidad por capas (parallax), sacudidas, cambios de encuadre.
+- Fondos: si son unicos o se reutilizan, si estan animados o quietos.
+- Efectos: particulas, destellos, lineas de velocidad, texto animado, emojis o graficos que aparecen.
+- Herramienta probable: que tipo de herramienta lo produciria (marcalo SIEMPRE como suposicion; no lo puedes saber con certeza).
+- Lo caro y lo barato: que parte del video exige mas trabajo de animacion y que parte es reutilizable o automatizable."""
 
 BREAKDOWN_SYSTEM_PROMPT = """Eres un editor y director de video corto (TikTok, Reels, Shorts) que hace ingenieria inversa de videos virales.
 Ves y escuchas UN video y lo desglosas con precision de produccion, para que otra persona pueda recrear la misma forma con otro tema.
@@ -1597,7 +1616,7 @@ def _gemini_subir_archivo(api_key: str, ruta: str, mime: str = "video/mp4") -> D
     return {"fileData": {"mimeType": mime, "fileUri": archivo["uri"]}}
 
 
-def _parte_video(api_key: str, ruta: str) -> Dict[str, Any]:
+def _parte_video(api_key: str, ruta: str, fps: int = _FPS_DESGLOSE) -> Dict[str, Any]:
     """El video como parte de la peticion: inline si cabe, File API si no."""
     if os.path.getsize(ruta) <= _MAX_INLINE_BYTES:
         with open(ruta, "rb") as f:
@@ -1605,7 +1624,7 @@ def _parte_video(api_key: str, ruta: str) -> Dict[str, Any]:
         parte = {"inlineData": {"mimeType": "video/mp4", "data": datos}}
     else:
         parte = _gemini_subir_archivo(api_key, ruta)
-    parte["videoMetadata"] = {"fps": _FPS_DESGLOSE}
+    parte["videoMetadata"] = {"fps": fps}
     return parte
 
 
@@ -1615,8 +1634,13 @@ def gemini_key(config: Optional[Dict[str, str]] = None) -> Optional[str]:
 
 
 def breakdown_video(video_path: str, meta: Dict[str, Any],
-                    config: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
-    """Gemini ve y escucha un video y devuelve su desglose de produccion."""
+                    config: Optional[Dict[str, str]] = None,
+                    animated: bool = False) -> Dict[str, Any]:
+    """
+    Gemini ve y escucha un video y devuelve su desglose de produccion. Con
+    animated=True mira mas fotogramas por segundo y desglosa tambien la
+    animacion: tecnica, estilo, personajes, movimiento y herramienta probable.
+    """
     api_key = gemini_key(config)
     if not api_key:
         return {"success": False, "content": None,
@@ -1635,9 +1659,11 @@ def breakdown_video(video_path: str, meta: Dict[str, Any],
         contexto.append(f"- Sonido segun TikTok: '{meta['music_title']}' de {meta.get('music_author') or '?'} ({tipo})")
 
     try:
-        parte = _parte_video(api_key, video_path)
-        texto = call_gemini(api_key, "\n".join(contexto) + "\n\n" + BREAKDOWN_OUTPUT_SPEC,
-                            BREAKDOWN_SYSTEM_PROMPT, media_parts=[parte], timeout=180)
+        parte = _parte_video(api_key, video_path,
+                             fps=_FPS_DESGLOSE_ANIMADO if animated else _FPS_DESGLOSE)
+        spec = BREAKDOWN_OUTPUT_SPEC + (ANIMATION_BREAKDOWN_SPEC if animated else "")
+        texto = call_gemini(api_key, "\n".join(contexto) + "\n\n" + spec,
+                            BREAKDOWN_SYSTEM_PROMPT, media_parts=[parte], timeout=240)
         return {"success": True, "provider": "gemini", "content": texto}
     except Exception as e:
         return {"success": False, "provider": "gemini", "content": None,
@@ -1681,9 +1707,36 @@ def _bloque_primera_semana(total_videos: int) -> str:
 
 def build_production_clone_prompt(reference_account: str, metrics: Optional[Dict[str, Any]],
                                   breakdowns: List[Dict[str, Any]], target: Dict[str, Any],
-                                  observations: str = "") -> str:
+                                  observations: str = "", animated_reference: bool = False) -> str:
     """Desgloses de los videos virales + numeros + perfil del canal nuevo."""
     nuevo = normalize_creator_profile({**target, "followers": 0})
+    nuevo_animado = nuevo["produccion"] == "animado"
+
+    seccion_estilo = ""
+    if animated_reference or nuevo_animado:
+        seccion_estilo = """
+
+### 🎨 El estilo de animacion y como reproducirlo
+""" + ("""Lo que se repite en la animacion de los videos desglosados (tecnica, estilo, personajes, movimiento, camara, fondos, efectos), citando video y segundo:
+| Aspecto | Como lo hacen | En que videos |
+""" if animated_reference else "Los videos de referencia no son animados: di como se traduce cada recurso visual suyo a animacion.\n") + """Despues, la version reproducible para el canal nuevo, con un estilo PROPIO (personajes y diseno originales, nunca los del canal de referencia):
+1. Que tecnica usar y por que (la mas barata que conserve lo que hace funcionar el formato).
+2. Herramientas concretas por tipo (generar personajes y fondos, animarlos, voz, edicion), con la opcion gratuita o barata primero. Si una herramienta es suposicion tuya, dilo.
+3. Como mantener el mismo personaje igual en todos los videos (hoja de personaje, misma referencia, mismo prompt base).
+4. Que se hace una sola vez (personajes, fondos, intro, plantilla de edicion) y que se hace en cada video.
+5. Pasos para producir UN video, en orden, con minutos estimados por paso."""
+
+    seccion_produccion = (
+        "### 🎥 Como producirlo y editarlo\n"
+        "Escenas a generar o animar, voz (propia o de IA), musica y efectos, pasos en la app de edicion con "
+        "los nombres de las funciones, minutos por video, y como producir en lote los videos de la semana "
+        "reutilizando personajes y fondos."
+        if nuevo_animado else
+        "### 🎥 Como grabarlo y editarlo\n"
+        "Equipo, locacion, pasos en la app de edicion (con los nombres de las funciones: subtitulos "
+        "automaticos, zoom, cortes de silencio, etc.), y minutos por video. Como grabar en lote los videos "
+        "de la semana."
+    )
     resumen = (metrics or {}).get("resumen", {})
 
     partes = [f"CANAL DE REFERENCIA: @{reference_account.strip().lstrip('@')}" if reference_account
@@ -1732,8 +1785,7 @@ Una linea por punto.
 El molde de video que el canal nuevo repite, con un ejemplo real del nicho nuevo:
 | Tiempo | Que se ve (plano) | Que se dice | Texto en pantalla | Audio | Corte / transicion |
 
-### 🎥 Como grabarlo y editarlo
-Equipo, locacion, pasos en la app de edicion (con los nombres de las funciones: subtitulos automaticos, zoom, cortes de silencio, etc.), y minutos por video. Como grabar en lote los videos de la semana.
+{seccion_produccion}{seccion_estilo}
 
 ### 🪪 El canal nuevo
 - 3 opciones de nombre de usuario (cortos, que digan el nicho, que no se parezcan al canal original).
@@ -1754,12 +1806,14 @@ def clone_channel_production(
     breakdowns: List[Dict[str, Any]],
     target: Dict[str, Any],
     observations: str = "",
-    config: Optional[Dict[str, str]] = None
+    config: Optional[Dict[str, str]] = None,
+    animated_reference: bool = False
 ) -> Dict[str, Any]:
     """Junta los desgloses en una receta de produccion para el nicho nuevo."""
     utiles = [b for b in breakdowns if b.get("content")]
     if not utiles:
         return {"success": False, "content": None,
                 "message": "No hay ningun video desglosado para armar la receta."}
-    prompt = build_production_clone_prompt(reference_account, metrics, utiles, target, observations)
+    prompt = build_production_clone_prompt(reference_account, metrics, utiles, target, observations,
+                                           animated_reference=animated_reference)
     return run_ai_task(prompt, PRODUCTION_CLONE_SYSTEM_PROMPT, config=config)
